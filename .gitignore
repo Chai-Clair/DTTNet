@@ -158,4 +158,5 @@ assets/
 
 notebooks/
 
-pretrained/
+pretrained/infer/
+*.bak
