@@ -74,9 +74,10 @@ class MusdbTrainDataset(MusdbDataset):
 			for p in range(-max_pitch, max_pitch+1):
 				for t in range(-max_tempo, max_tempo+1, 10):
 					aug_split = split if p == t == 0 else split + f'_p={p}_t={t}'
-			dataset_path = self.musdb_path.joinpath(aug_split) if p == t == 0 else self.musdb_path.joinpath('augmentation').joinpath(aug_split)
-			datasets.append(dataset_path)
-			metadata_caches.append(self.musdb_path.joinpath('metadata').joinpath(aug_split + '.pkl'))
+					dataset_path = self.musdb_path.joinpath(aug_split) if p == t == 0 else self.musdb_path.joinpath('augmentation').joinpath(aug_split)
+					datasets.append(dataset_path)
+					metadata_caches.append(
+						self.musdb_path.joinpath('metadata').joinpath(aug_split + '.pkl'))
 
 		# collect all track names and their duration
 		self.metadata = []
