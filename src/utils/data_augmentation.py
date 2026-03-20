@@ -66,8 +66,8 @@ def shift(wav, pitch, tempo, voice=False, quick=False, samplerate=44100):
     https://www.surina.net/soundtouch/soundstretch.html
     """
 
-    inputfile = tempfile.NamedTemporaryFile(dir="/root/autodl-tmp/tmp", suffix=".wav")
-    outfile = tempfile.NamedTemporaryFile(dir="/root/autodl-tmp/tmp", suffix=".wav")
+    inputfile = tempfile.NamedTemporaryFile(dir="/home/ubuntu/CZJ/DTT/tmp", suffix=".wav")
+    outfile = tempfile.NamedTemporaryFile(dir="/home/ubuntu/CZJ/DTT/tmp", suffix=".wav")
 
     sf.write(inputfile.name, data=i16_pcm(wav).t().numpy(), samplerate=samplerate, format='WAV')
     command = [
@@ -93,7 +93,10 @@ def shift(wav, pitch, tempo, voice=False, quick=False, samplerate=44100):
 
 
 def save_shifted_dataset(delta_pitch, delta_tempo, data_path):
-    out_path = data_path[:-1] + f'_p={delta_pitch}_t={delta_tempo}/'
+    base_name = os.path.basename(os.path.normpath(data_path))
+    aug_root = os.path.join(os.path.dirname(os.path.normpath(data_path)), "augmentation")
+    os.makedirs(aug_root, exist_ok=True)
+    out_path = os.path.join(aug_root, f"{base_name}_p={delta_pitch}_t={delta_tempo}") + '/'
     try:
         os.mkdir(out_path)
     except FileExistsError:
