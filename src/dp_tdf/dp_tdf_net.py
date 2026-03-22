@@ -13,15 +13,15 @@ class DPTDFNet(AbstractModel):
         super(DPTDFNet, self).__init__(**kwargs)
         # self.save_hyperparameters()
 
-        self.num_blocks = num_blocks
-        self.l = l
-        self.g = g
-        self.k = k
+        self.num_blocks = num_blocks #U-Net主框架encoder和decoder共有多少个block
+        self.l = l #
+        self.g = g  #通道数增量
+        self.k = k  #应该是卷积核大小
         self.bn = bn
-        self.bias = bias
+        self.bias = bias    #卷积层/线性层要不要带偏置项（bias）
 
-        self.n = num_blocks // 2
-        scale = (2, 2)
+        self.n = num_blocks // 2    #encoder和decoder各一半
+        scale = (2, 2)  #上采样和下采样都按2倍缩放
 
         if block_type == "TFC_TDF":
             T_BLOCK = TFC_TDF
@@ -38,8 +38,8 @@ class DPTDFNet(AbstractModel):
             nn.ReLU(),
         )
 
-        f = self.dim_f
-        c = g
+        f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
+        c = g   #first_conv后的通道数
         self.encoding_blocks = nn.ModuleList()
         self.ds = nn.ModuleList()
 

@@ -21,27 +21,32 @@ class AbstractModel(LightningModule):
 				 audio_ch,
 				  **kwargs):
 		super().__init__()
-		self.target_name = target_name
-		self.lr = lr
-		self.optimizer = optimizer
-		self.dim_c_in = audio_ch * 2
-		self.dim_c_out = audio_ch * 2
-		self.dim_f = dim_f
-		self.dim_t = dim_t
-		self.n_fft = n_fft
-		self.n_bins = n_fft // 2 + 1
-		self.hop_length = hop_length
-		self.audio_ch = audio_ch
+		self.target_name = target_name	#当前模型要分离的目标源名字 如vocal、drums等
+		self.lr = lr	#学习率learning rate
+		self.optimizer = optimizer	#优化器种类 如Adam
+		self.dim_c_in = audio_ch * 2	#输入通道数（*2是因为短时傅里叶之后包含实部和虚部：左声道实部&左声道虚部&右声道实部&右声道虚部）
+		self.dim_c_out = audio_ch * 2	#输出通道数
+		self.dim_f = dim_f	#模型真正保留的频率维大小（通常小于n_bins）
+		self.dim_t = dim_t	#时间维长度  单位：帧
+		self.n_fft = n_fft	#STFT窗长（每个STFT窗口的采样点数量）
+		self.n_bins = n_fft // 2 + 1	#有效的频率点个数（奈奎斯特频率） stft之后的max频率
+		self.hop_length = hop_length	#滑窗每次往前走多少（两帧之间采样点数量）
+		self.audio_ch = audio_ch	#声道数
 
-		self.chunk_size = hop_length * (self.dim_t - 1)
-		self.inference_chunk_size = hop_length * (self.dim_t*2 - 1)
-		self.overlap = overlap
+		#chunk：一段连续的音频片段，它是模型实际处理的输入单元。（切割原信号为很多小片）
+		self.chunk_size = hop_length * (self.dim_t - 1)	#训练的chunk，单次数据量。多个chunk组成一个batch
+		self.inference_chunk_size = hop_length * (self.dim_t*2 - 1)	#比训练的chunk更长，希望看到更多一点上下文
+		self.overlap = overlap	# 推理时分块之间的重叠长度
 		self.window = nn.Parameter(torch.hann_window(window_length=self.n_fft, periodic=True), requires_grad=False)
+		# 固定Hann窗，给STFT/ISTFT用，不参与梯度更新（requires_grad=False）
 		self.freq_pad = nn.Parameter(torch.zeros([1, self.dim_c_out, self.n_bins - self.dim_f, 1]), requires_grad=False)
+		#固定的0张量，istft时把模型输出的裁剪后频谱补回到完整频谱纬度（dim_f->n_bins）
 		self.inference_chunk_shape = (self.stft(torch.zeros([1, audio_ch, self.inference_chunk_size]))).shape
+		#初始化时，先拿一个全0的假输入过一次stft，把推理chunk对应的频谱shape存下来，提前知道推理时一块音频进频谱后长什么样。
 
 
 	def configure_optimizers(self):
+		# 根据配置决定训练时用哪种优化器
 		if self.optimizer == 'rmsprop':
 			print("Using RMSprop optimizer")
 			return torch.optim.RMSprop(self.parameters(), self.lr)
@@ -50,18 +55,20 @@ class AbstractModel(LightningModule):
 			return torch.optim.AdamW(self.parameters(), self.lr)
 
 	def comp_loss(self, pred_detail, target_wave):
-		pred_detail = self.istft(pred_detail)
+		#把模型输出从频谱域转回波形域，再计算 L1 损失。
+		pred_detail = self.istft(pred_detail)	# 模型输出的是频谱，先ISTFT回波形
 
-		comp_loss = F.l1_loss(pred_detail, target_wave)
+		comp_loss = F.l1_loss(pred_detail, target_wave)		# 用波形域的 L1 loss 做训练目标
 
-		self.log("train/comp_loss", comp_loss, sync_dist=True, on_step=False, on_epoch=True, prog_bar=False)
+		self.log("train/comp_loss", comp_loss, sync_dist=True, on_step=False, on_epoch=True, prog_bar=False)	#把损失记录到日志
 
 		return comp_loss
 
 
 	def training_step(self, *args, **kwargs) -> STEP_OUTPUT:
+		#定义训练时一个batch怎么跑。*args, **kwargs 用于接收框架自动传入的参数。
+		# 通常 Lightning 调用时会传入 (batch, batch_idx)。这里通过 args[0] 获取第一个参数，即 batch。
 		mix_wave, target_wave = args[0] # (batch, c, 261120)
-
 		# input 1
 		stft_44k = self.stft(mix_wave) # (batch, c*2, 1044, 256)
 		# forward
@@ -81,8 +88,8 @@ class AbstractModel(LightningModule):
 	# load them on multiple gpus, but aggregation was too difficult.
 	# So instead we load one whole track on a single device (data_loader batch_size should always be 1)
 	# and do all the batch splitting and aggregation on a single device.
-	def validation_step(self, *args, **kwargs) -> Optional[STEP_OUTPUT]:
-		mix_chunk_batches, target = args[0]
+	def validation_step(self, *args, **kwargs) -> Optional[STEP_OUTPUT]:	#验证集上按照整首歌的方式评估模型
+		mix_chunk_batches, target = args[0]	#mix_chunk_batches是一个列表，每个其中的每个元素是一个batch
 
 		# remove data_loader batch dimension
 		# [(b, c, time)], (c, all_times)
@@ -94,16 +101,17 @@ class AbstractModel(LightningModule):
 			# input
 			stft_44k = self.stft(batch)  # (batch, c*2, 1044, 256)
 			pred_detail = self(stft_44k) # (batch, c, 1044, 256), irm
-			pred_detail = self.istft(pred_detail)
+			pred_detail = self.istft(pred_detail)	#得到每个chunk的波形
 
-			target_hat_chunks.append(pred_detail[..., self.overlap:-self.overlap])
-		target_hat_chunks = torch.cat(target_hat_chunks) # (b*len(ls),c,t)
+			target_hat_chunks.append(pred_detail[..., self.overlap:-self.overlap])	#减少chunk边界伪影，存入target_hat_chunks
+		target_hat_chunks = torch.cat(target_hat_chunks) # (b*len(ls),c,t) 拼接（总块数，c，有效长度）
 
 		# concat all output chunks (c, all_times)
-		target_hat = target_hat_chunks.transpose(0, 1).reshape(self.audio_ch, -1)[..., :target.shape[-1]]
+		target_hat = target_hat_chunks.transpose(0, 1).reshape(self.audio_ch, -1)[..., :target.shape[-1]]	#交换前两维，后两维合并，截取与目标相同的长度
 
 		ests = target_hat.detach().cpu().numpy()  # (c, all_times)
 		references = target.cpu().numpy()
+		#↑将估计波形和target转化为numpy数组
 		score = sdr(ests, references)
 
 		# (src, t, c)
@@ -112,14 +120,15 @@ class AbstractModel(LightningModule):
 
 		return {'song': score, 'chunk': SDR}
 
-	def validation_epoch_end(self, outputs) -> None:
-		avg_uSDR = torch.Tensor([x['song'] for x in outputs]).mean()
+	def validation_epoch_end(self, outputs) -> None:	#把整轮验证里所有歌曲的结果汇总，得到最终验证指标。
+		avg_uSDR = torch.Tensor([x['song'] for x in outputs]).mean()	#把每首歌的 song-level SDR 求平均
 		self.log("val/usdr", avg_uSDR, sync_dist=True, on_step=False, on_epoch=True, logger=True)
 
 		chunks = [x['chunk'][0, :] for x in outputs]
 		# concat np array
 		chunks = np.concatenate(chunks, axis=0)
 		median_cSDR = np.nanmedian(chunks.flatten(), axis=0)
+		# 把所有 chunk 的 SDR 拼起来，取中位数cSDR
 		median_cSDR = float(median_cSDR)
 		self.log("val/csdr", median_cSDR, sync_dist=True, on_step=False, on_epoch=True, logger=True)
 
