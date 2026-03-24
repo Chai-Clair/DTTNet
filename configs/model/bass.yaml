@@ -8,6 +8,8 @@ optimizer: adamW
 dim_f: 864
 dim_t: 256
 n_fft: 6144
+n_fft_short: 4096
+n_fft_long: 8192
 hop_length: 1024
 overlap: 3072
 
@@ -26,3 +28,8 @@ bandsequence:
   bidirectional: True
   num_layers: 4
   n_heads: 2
+
+mr_frontend:
+  num_branch_layers: 2  #每一路分支两层卷积块
+  weight_hidden_dim: 128  #权重网络隐藏层128
+  align_mode: bilinear  #对齐方式bilinear
