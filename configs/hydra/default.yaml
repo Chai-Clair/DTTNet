@@ -1,7 +1,7 @@
 # output paths for hydra logs
 run:
 #  dir: logs/runs/${datamodule.target_name}_${exp_name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
-  dir: ${get_train_log_dir:${datamodule.target_name},${exp_name}}
+  dir: ${oc.env:LOG_DIR}/${exp_name}_${now:%Y-%m-%d_%H-%M-%S}
 
 sweep:
 #  dir: logs/multiruns/${now:%Y-%m-%d_%H-%M-%S}
