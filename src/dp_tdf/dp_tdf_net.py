@@ -6,9 +6,10 @@ from src.dp_tdf.bandsequence import BandSequenceModelModule
 
 from src.layers import (get_norm)
 from src.dp_tdf.abstract import AbstractModel
+from src.dp_tdf.mr_frontend import MRFrontend
 
 class DPTDFNet(AbstractModel):
-    def __init__(self, num_blocks, l, g, k, bn, bias, bn_norm, bandsequence, block_type,  **kwargs):
+    def __init__(self, num_blocks, l, g, k, bn, bias, bn_norm, bandsequence, block_type, mr_frontend=None, **kwargs):
 
         super(DPTDFNet, self).__init__(**kwargs)
         # self.save_hyperparameters()
@@ -37,6 +38,19 @@ class DPTDFNet(AbstractModel):
             get_norm(bn_norm, g),
             nn.ReLU(),
         )
+
+        self.use_mr_frontend = mr_frontend is not None
+
+        if self.use_mr_frontend:
+            self.mr_frontend = MRFrontend(
+                dim_c_in=self.dim_c_in,
+                g=g,
+                bn_norm=bn_norm,
+                bias=bias,
+                **mr_frontend
+            )
+            # 残差缩放系数，第一版用可学习标量
+            self.fusion_scale = nn.Parameter(torch.tensor(0.1))
 
         f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
         c = g   #first_conv后的通道数
@@ -86,14 +100,27 @@ class DPTDFNet(AbstractModel):
         )
 
     def forward(self, x):
-        '''
-        Args:
-            x: (batch, c*2, 2048, 256)
-        '''
-        x = self.first_conv(x)
+        """
+            两种输入形式：
+            1. 原始 DTT：x是tensor，shape=(B, C_in, F, T)
+            2. 严格版多窗前端：x是dict，包含short/mid/long
+        """
+        if isinstance(x, dict):
+            x_short = x["short"]
+            x_mid = x["mid"]
+            x_long = x["long"]
+            # 中窗主路：复用原始first_conv
+            f_base = self.first_conv(x_mid)
+            if self.use_mr_frontend:
+                f_fused = self.mr_frontend(x_short, f_base, x_long)
+                x = f_base + self.fusion_scale * f_fused
+            else:
+                x = f_base
+        else:
+            # 兼容原始单窗逻辑
+            x = self.first_conv(x)
 
         x = x.transpose(-1, -2)
-
         ds_outputs = []
         for i in range(self.n):
             x = self.encoding_blocks[i](x)

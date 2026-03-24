@@ -118,7 +118,11 @@ def separate_with_ckpt_TDF(batch_size, model, ckpt_path: Path, mix, device, doub
         target_wav_hat: (c, t)
     '''
     checkpoint = torch.load(ckpt_path)
+    #missing, unexpected = model.load_state_dict(checkpoint["state_dict"], strict=False)
+    #print("Missing keys:", missing)
+    #print("Unexpected keys:", unexpected)
     model.load_state_dict(checkpoint["state_dict"])
+
     model = model.to(device)
     # model = model.load_from_checkpoint(ckpt_path).to(device)
     if double_chunk:
@@ -153,8 +157,8 @@ def no_overlap_inference(model, mix, device, batch_size, inf_ck):
     with torch.no_grad():
         model.eval()
         for mixture_wav in mix_waves_batched:
-            mix_spec = model.stft(mixture_wav.to(device))
-            spec_hat = model(mix_spec)
+            mix_specs = model.multi_stft(mixture_wav.to(device))
+            spec_hat = model(mix_specs)
             target_wav_hat = model.istft(spec_hat)
             target_wav_hat = target_wav_hat.cpu().detach().numpy()
             target_wav_hats.append(target_wav_hat) # (b, c, t)
@@ -181,8 +185,8 @@ def overlap_inference(model, mix, device, batch_size, inf_ck, overlap_rate, tmp_
     with torch.no_grad():
         model.eval()
         for mixture_wav in mix_waves_batched:
-            mix_spec = model.stft(mixture_wav.to(device))
-            spec_hat = model(mix_spec)
+            mix_specs = model.multi_stft(mixture_wav.to(device))
+            spec_hat = model(mix_specs)
             target_wav_hat = model.istft(spec_hat)
             target_wav_hat = target_wav_hat.cpu().detach().numpy()
             target_wav_hats.append(target_wav_hat) # (b, c, t)

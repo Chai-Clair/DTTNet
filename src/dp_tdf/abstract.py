@@ -17,7 +17,7 @@ class AbstractModel(LightningModule):
 
 	def __init__(self, target_name,
 				 lr, optimizer,
-				  dim_f, dim_t, n_fft, hop_length, overlap,
+				  dim_f, dim_t, n_fft, n_fft_short, n_fft_long, hop_length, overlap,
 				 audio_ch,
 				  **kwargs):
 		super().__init__()
@@ -28,8 +28,17 @@ class AbstractModel(LightningModule):
 		self.dim_c_out = audio_ch * 2	#输出通道数
 		self.dim_f = dim_f	#模型真正保留的频率维大小（通常小于n_bins）
 		self.dim_t = dim_t	#时间维长度  单位：帧
-		self.n_fft = n_fft	#STFT窗长（每个STFT窗口的采样点数量）
-		self.n_bins = n_fft // 2 + 1	#有效的频率点个数（奈奎斯特频率） stft之后的max频率
+
+		self.n_fft_mid = n_fft	#中窗长
+		self.n_fft_short = n_fft_short	#短窗长
+		self.n_fft_long = n_fft_long	#长窗长
+		self.n_fft = self.n_fft_mid  # STFT窗长（每个STFT窗口的采样点数量）
+
+		self.n_bins_mid = self.n_fft_mid // 2 + 1
+		self.n_bins_short = self.n_fft_short // 2 + 1
+		self.n_bins_long = self.n_fft_long // 2 + 1
+		self.n_bins = self.n_bins_mid  # 有效的频率点个数（奈奎斯特频率） stft之后的max频率
+
 		self.hop_length = hop_length	#滑窗每次往前走多少（两帧之间采样点数量）
 		self.audio_ch = audio_ch	#声道数
 
@@ -37,10 +46,16 @@ class AbstractModel(LightningModule):
 		self.chunk_size = hop_length * (self.dim_t - 1)	#训练的chunk，单次数据量。多个chunk组成一个batch
 		self.inference_chunk_size = hop_length * (self.dim_t*2 - 1)	#比训练的chunk更长，希望看到更多一点上下文
 		self.overlap = overlap	# 推理时分块之间的重叠长度
-		self.window = nn.Parameter(torch.hann_window(window_length=self.n_fft, periodic=True), requires_grad=False)
+
 		# 固定Hann窗，给STFT/ISTFT用，不参与梯度更新（requires_grad=False）
+		#self.window = nn.Parameter(torch.hann_window(window_length=self.n_fft, periodic=True), requires_grad=False)
+		self.window_mid = nn.Parameter(torch.hann_window(window_length=self.n_fft_mid, periodic=True),requires_grad=False)
+		self.window_short = nn.Parameter(torch.hann_window(window_length=self.n_fft_short, periodic=True),requires_grad=False)
+		self.window_long = nn.Parameter(torch.hann_window(window_length=self.n_fft_long, periodic=True),requires_grad=False)
+		self.window = self.window_mid
+
 		self.freq_pad = nn.Parameter(torch.zeros([1, self.dim_c_out, self.n_bins - self.dim_f, 1]), requires_grad=False)
-		#固定的0张量，istft时把模型输出的裁剪后频谱补回到完整频谱纬度（dim_f->n_bins）
+		#固定的0张量，istft时把模型输出的裁剪后频谱补回到完整频谱纬度（dim_f->n_bins）。因为模型输出只预测中窗域前 dim_f 个频率 bin，所以 istft() 前需要补回完整的中窗频率维
 		self.inference_chunk_shape = (self.stft(torch.zeros([1, audio_ch, self.inference_chunk_size]))).shape
 		#初始化时，先拿一个全0的假输入过一次stft，把推理chunk对应的频谱shape存下来，提前知道推理时一块音频进频谱后长什么样。
 
@@ -70,9 +85,9 @@ class AbstractModel(LightningModule):
 		# 通常 Lightning 调用时会传入 (batch, batch_idx)。这里通过 args[0] 获取第一个参数，即 batch。
 		mix_wave, target_wave = args[0] # (batch, c, 261120)
 		# input 1
-		stft_44k = self.stft(mix_wave) # (batch, c*2, 1044, 256)
+		mix_specs = self.multi_stft(mix_wave)
 		# forward
-		t_est_stft = self(stft_44k) # (batch, c, 1044, 256)
+		t_est_stft = self(mix_specs) # (batch, c, 1044, 256)
 
 		loss = self.comp_loss(t_est_stft, target_wave)
 
@@ -99,8 +114,8 @@ class AbstractModel(LightningModule):
 		target_hat_chunks = []
 		for batch in mix_chunk_batches:
 			# input
-			stft_44k = self.stft(batch)  # (batch, c*2, 1044, 256)
-			pred_detail = self(stft_44k) # (batch, c, 1044, 256), irm
+			mix_specs = self.multi_stft(batch)  # (batch, c*2, 1044, 256)
+			pred_detail = self(mix_specs) # (batch, c, 1044, 256), irm
 			pred_detail = self.istft(pred_detail)	#得到每个chunk的波形
 
 			target_hat_chunks.append(pred_detail[..., self.overlap:-self.overlap])	#减少chunk边界伪影，存入target_hat_chunks
@@ -132,30 +147,64 @@ class AbstractModel(LightningModule):
 		median_cSDR = float(median_cSDR)
 		self.log("val/csdr", median_cSDR, sync_dist=True, on_step=False, on_epoch=True, logger=True)
 
-	def stft(self, x):
-		'''
-		Args:
-		x: (batch, c, 261120)
-		'''
+	def _stft_impl(self, x, n_fft, window):
+		"""
+        通用STFT实现
+        输入x: (B, C, T)
+        输出(B, C*2, F, T_frames)
+        """
 		dim_b = x.shape[0]
-		x = x.reshape([dim_b * self.audio_ch, -1])  # (batch*c, 261120)
-
+		x = x.reshape([dim_b * self.audio_ch, -1])
 		x = torch.stft(
-		x,
-		n_fft=self.n_fft,
-		hop_length=self.hop_length,
-		window=self.window,
-		center=True,
-		return_complex=True,
-		)  # (batch*c, 3073, 256)
+			x,
+			n_fft=n_fft,
+			hop_length=self.hop_length,
+			window=window,
+			center=True,
+			return_complex=True,
+		)
+		x = torch.view_as_real(x)
+		x = x.permute([0, 3, 1, 2])
+		x = x.reshape([dim_b, self.audio_ch, 2, x.shape[-2], -1]).reshape(
+			[dim_b, self.audio_ch * 2, x.shape[-2], -1]
+		)
 
-		x = torch.view_as_real(x)  # (batch*c, 3073, 256, 2)
-		x = x.permute([0, 3, 1, 2])  # (batch*c, 2, 3073, 256)
-		x = x.reshape([dim_b, self.audio_ch, 2, self.n_bins, -1]).reshape(
-		[dim_b, self.audio_ch * 2, self.n_bins, -1]
-		)  # (batch, c*2, 3073, 256)
+		return x
 
-		return x[:, :, :self.dim_f]  # (batch, c*2, 2048, 256)
+	def stft(self, x):
+		"""
+        为了兼容原始代码，stft默认仍然表示中窗STFT
+        输出频率维仍然裁到self.dim_f，作为主干输入域
+        """
+		x = self._stft_impl(x, self.n_fft_mid, self.window_mid)
+		return x[:, :, :self.dim_f]
+
+	def stft_short(self, x):
+		"""
+        短窗 STFT
+        第一版不裁频率维，后面交给前端模块统一对齐
+        """
+		return self._stft_impl(x, self.n_fft_short, self.window_short)
+
+	def stft_long(self, x):
+		"""
+        长窗 STFT
+        第一版不裁频率维，后面交给前端模块统一对齐
+        """
+		return self._stft_impl(x, self.n_fft_long, self.window_long)
+
+	def multi_stft(self, x):
+		"""
+        返回三路输入
+        约定：
+        - mid是主干输入域
+        - short / long 作为辅助前端输入
+        """
+		return {
+			"short": self.stft_short(x),	#待裁剪
+			"mid": self.stft(x),  # 中窗，保留原始 DTT 输入域
+			"long": self.stft_long(x),	#待裁剪
+		}
 
 	def istft(self, x):
 		'''
