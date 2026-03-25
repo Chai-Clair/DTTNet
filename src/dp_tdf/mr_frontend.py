@@ -146,20 +146,6 @@ class MRFrontend(nn.Module):
         f_l = self.branch_long(f_l0)
 
         a_s, a_m, a_l, lambda_scale = self.weight_net(f_s, f_m, f_l)
-        # 每次 forward 都打印当前 batch 中每个样本的一组 alpha / lambda
-        alpha_s = a_s.detach().view(-1).cpu()
-        alpha_m = a_m.detach().view(-1).cpu()
-        alpha_l = a_l.detach().view(-1).cpu()
-        lambda_v = lambda_scale.detach().view(-1).cpu()
-
-        for i, (as_, am_, al_, lam_) in enumerate(zip(alpha_s, alpha_m, alpha_l, lambda_v)):
-            print(
-                f"[AMR] sample={i} | "
-                f"alpha_s={as_.item():.6f}, "
-                f"alpha_m={am_.item():.6f}, "
-                f"alpha_l={al_.item():.6f}, "
-                f"lambda={lam_.item():.6f}"
-            )
-            
+        
         f_fused = a_s * f_s + a_m * f_m + a_l * f_l
         return f_fused, lambda_scale
