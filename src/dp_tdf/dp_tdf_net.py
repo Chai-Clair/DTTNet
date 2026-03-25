@@ -49,8 +49,8 @@ class DPTDFNet(AbstractModel):
                 bias=bias,
                 **mr_frontend
             )
-            # 残差缩放系数，第一版用可学习标量
-            self.fusion_scale = nn.Parameter(torch.tensor(0.1))
+            self.post_fusion_norm = get_norm(bn_norm, g)
+
 
         f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
         c = g   #first_conv后的通道数
@@ -101,23 +101,32 @@ class DPTDFNet(AbstractModel):
 
     def forward(self, x):
         """
-            两种输入形式：
-            1. 原始 DTT：x是tensor，shape=(B, C_in, F, T)
-            2. 严格版多窗前端：x是dict，包含short/mid/long
+        两种输入形式：
+        1. 原始 DTT：x 是 tensor，shape=(B, C_in, F, T)
+        2. 多窗前端版：x 是 dict，包含 short / mid / long
         """
+
         if isinstance(x, dict):
             x_short = x["short"]
             x_mid = x["mid"]
             x_long = x["long"]
-            # 中窗主路：复用原始first_conv
+
+            # 中窗主路：先过原始 first_conv
             f_base = self.first_conv(x_mid)
+
             if self.use_mr_frontend:
-                f_fused = self.mr_frontend(x_short, f_base, x_long)
-                x = f_base + self.fusion_scale * f_fused
+                # 多窗前端输出：
+                # f_fused: (B, g, F_m, T_m)
+                # lambda_scale: (B, 1, 1, 1)
+                f_fused, lambda_scale = self.mr_frontend(x_short, f_base, x_long)
+
+                # 动态 lambda 残差融合 + 归一化
+                x = self.post_fusion_norm(f_base + lambda_scale * f_fused)
             else:
                 x = f_base
+
         else:
-            # 兼容原始单窗逻辑
+            # 兼容原始单窗输入
             x = self.first_conv(x)
 
         x = x.transpose(-1, -2)
@@ -127,19 +136,15 @@ class DPTDFNet(AbstractModel):
             ds_outputs.append(x)
             x = self.ds[i](x)
 
-        # print(f"bottleneck in: {x.shape}")
         x = self.bottleneck_block1(x)
         x = self.bottleneck_block2(x)
 
         for i in range(self.n):
             x = self.us[i](x)
-            # print(f"us{i} in: {x.shape}")
-            # print(f"ds{i} out: {ds_outputs[-i - 1].shape}")
             x = x * ds_outputs[-i - 1]
             x = self.decoding_blocks[i](x)
 
         x = x.transpose(-1, -2)
-
         x = self.final_conv(x)
 
         return x

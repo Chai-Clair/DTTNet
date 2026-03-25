@@ -37,14 +37,19 @@ class MRBranch(nn.Module):
 
 class WeightNet(nn.Module):
     """
-    三路动态权重生成模块
-    输入：三路特征
-    输出：alpha_short, alpha_mid, alpha_long
+    输出：
+    1. 三路动态融合权重 alpha_s, alpha_m, alpha_l
+    2. 输入自适应动态标量 lambda_scale
     """
     def __init__(self, channels, hidden_dim=128):
         super().__init__()
         self.fc1 = nn.Linear(channels * 3, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 3)
+
+        # 三路 softmax 权重头
+        self.fc_alpha = nn.Linear(hidden_dim, 3)
+
+        # 动态 lambda 头（每个样本一个标量）
+        self.fc_lambda = nn.Linear(hidden_dim, 1)
 
     def forward(self, f_s, f_m, f_l):
         # GAP: (B, C, F, T) -> (B, C)
@@ -53,13 +58,19 @@ class WeightNet(nn.Module):
         z_l = f_l.mean(dim=(-1, -2))
 
         z = torch.cat([z_s, z_m, z_l], dim=1)   # (B, 3C)
-        z = F.relu(self.fc1(z))
-        alpha = torch.softmax(self.fc2(z), dim=1)  # (B, 3)
+        h = F.relu(self.fc1(z))                 # (B, hidden_dim)
+
+        # 三路动态权重
+        alpha = torch.softmax(self.fc_alpha(h), dim=1)   # (B, 3)
 
         a_s = alpha[:, 0].view(-1, 1, 1, 1)
         a_m = alpha[:, 1].view(-1, 1, 1, 1)
         a_l = alpha[:, 2].view(-1, 1, 1, 1)
-        return a_s, a_m, a_l
+
+        # 动态 lambda，限制到 0~1
+        lambda_scale = torch.sigmoid(self.fc_lambda(h)).view(-1, 1, 1, 1)
+
+        return a_s, a_m, a_l, lambda_scale
 
 
 class MRFrontend(nn.Module):
@@ -119,7 +130,8 @@ class MRFrontend(nn.Module):
         x_long: 长窗原始谱图，shape=(B, dim_c_in, F_l, T_l)
 
         返回：
-        F_fused: shape=(B, g, F_m, T_m)
+        f_fused: (B, g, F_m, T_m)
+        lambda_scale: (B, 1, 1, 1)
         """
         target_hw = f_mid_base.shape[-2:]  # (F_m, T_m)
 
@@ -133,7 +145,21 @@ class MRFrontend(nn.Module):
         f_m = self.branch_mid(f_mid_base)
         f_l = self.branch_long(f_l0)
 
-        a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
+        a_s, a_m, a_l, lambda_scale = self.weight_net(f_s, f_m, f_l)
+        # 每次 forward 都打印当前 batch 中每个样本的一组 alpha / lambda
+        alpha_s = a_s.detach().view(-1).cpu()
+        alpha_m = a_m.detach().view(-1).cpu()
+        alpha_l = a_l.detach().view(-1).cpu()
+        lambda_v = lambda_scale.detach().view(-1).cpu()
 
+        for i, (as_, am_, al_, lam_) in enumerate(zip(alpha_s, alpha_m, alpha_l, lambda_v)):
+            print(
+                f"[AMR] sample={i} | "
+                f"alpha_s={as_.item():.6f}, "
+                f"alpha_m={am_.item():.6f}, "
+                f"alpha_l={al_.item():.6f}, "
+                f"lambda={lam_.item():.6f}"
+            )
+            
         f_fused = a_s * f_s + a_m * f_m + a_l * f_l
-        return f_fused
+        return f_fused, lambda_scale
