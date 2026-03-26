@@ -41,7 +41,7 @@ class WeightNet(nn.Module):
     1. 三路动态融合权重 alpha_s, alpha_m, alpha_l
     2. 输入自适应动态标量 lambda_scale
     """
-    def __init__(self, channels, hidden_dim=128):
+    def __init__(self, channels, hidden_dim=128, lambda_max=0.3):
         super().__init__()
         self.fc1 = nn.Linear(channels * 3, hidden_dim)
 
@@ -50,6 +50,9 @@ class WeightNet(nn.Module):
 
         # 动态 lambda 头（每个样本一个标量）
         self.fc_lambda = nn.Linear(hidden_dim, 1)
+
+        #λ缩小系数
+        self.lambda_max = lambda_max
 
     def forward(self, f_s, f_m, f_l):
         # GAP: (B, C, F, T) -> (B, C)
@@ -68,7 +71,7 @@ class WeightNet(nn.Module):
         a_l = alpha[:, 2].view(-1, 1, 1, 1)
 
         # 动态 lambda，限制到 0~1
-        lambda_scale = torch.sigmoid(self.fc_lambda(h)).view(-1, 1, 1, 1)
+        lambda_scale = self.lambda_max * torch.sigmoid(self.fc_lambda(h)).view(-1, 1, 1, 1)
 
         return a_s, a_m, a_l, lambda_scale
 
@@ -90,6 +93,7 @@ class MRFrontend(nn.Module):
         bn_norm,
         num_branch_layers=2,
         weight_hidden_dim=128,
+        lambda_max = 0.3,
         bias=False,
         align_mode="bilinear",
     ):
@@ -115,7 +119,7 @@ class MRFrontend(nn.Module):
         self.branch_mid = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
         self.branch_long = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
 
-        self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim)
+        self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim, lambda_max=lambda_max)
 
     def _align_to_mid(self, x, target_hw):
         # x: (B, C, F, T)
