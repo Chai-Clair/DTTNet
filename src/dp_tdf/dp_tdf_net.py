@@ -51,6 +51,7 @@ class DPTDFNet(AbstractModel):
             )
             # 残差缩放系数，第一版用可学习标量
             self.fusion_scale = nn.Parameter(torch.tensor(0.1))
+            self.post_fusion_norm = get_norm(bn_norm, g)
 
         f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
         c = g   #first_conv后的通道数
@@ -113,7 +114,7 @@ class DPTDFNet(AbstractModel):
             f_base = self.first_conv(x_mid)
             if self.use_mr_frontend:
                 f_fused = self.mr_frontend(x_short, f_base, x_long)
-                x = f_base + self.fusion_scale * f_fused
+                x = self.post_fusion_norm(f_base + self.fusion_scale * f_fused)
             else:
                 x = f_base
         else:
