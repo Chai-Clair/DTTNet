@@ -59,7 +59,8 @@ class WeightNet(nn.Module):
 
         if branch_mask is not None:
             # branch_mask: (B, 3)，True 表示保留，False 表示禁用
-            logits = logits.masked_fill(~branch_mask, -1e9)
+            mask_value = torch.finfo(logits.dtype).min
+            logits = logits.masked_fill(~branch_mask, mask_value)
 
         alpha = torch.softmax(logits, dim=1)  # (B, 3)
 
