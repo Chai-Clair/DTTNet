@@ -46,7 +46,7 @@ class WeightNet(nn.Module):
         self.fc1 = nn.Linear(channels * 3, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, 3)
 
-    def forward(self, f_s, f_m, f_l):
+    def forward(self, f_s, f_m, f_l, branch_mask=None):
         # GAP: (B, C, F, T) -> (B, C)
         z_s = f_s.mean(dim=(-1, -2))
         z_m = f_m.mean(dim=(-1, -2))
@@ -54,7 +54,14 @@ class WeightNet(nn.Module):
 
         z = torch.cat([z_s, z_m, z_l], dim=1)   # (B, 3C)
         z = F.relu(self.fc1(z))
-        alpha = torch.softmax(self.fc2(z), dim=1)  # (B, 3)
+
+        logits = self.fc2(z)  # (B, 3)
+
+        if branch_mask is not None:
+            # branch_mask: (B, 3)，True 表示保留，False 表示禁用
+            logits = logits.masked_fill(~branch_mask, -1e9)
+
+        alpha = torch.softmax(logits, dim=1)  # (B, 3)
 
         a_s = alpha[:, 0].view(-1, 1, 1, 1)
         a_m = alpha[:, 1].view(-1, 1, 1, 1)
@@ -81,10 +88,14 @@ class MRFrontend(nn.Module):
         weight_hidden_dim=128,
         bias=False,
         align_mode="bilinear",
+        use_short = True,
+        use_long = True,
     ):
         super().__init__()
 
         self.align_mode = align_mode
+        self.use_short = use_short
+        self.use_long = use_long
 
         # 只有 long / short 需要额外 stem
         self.stem_short = nn.Sequential(
@@ -123,17 +134,32 @@ class MRFrontend(nn.Module):
         """
         target_hw = f_mid_base.shape[-2:]  # (F_m, T_m)
 
-        f_s0 = self.stem_short(x_short)
-        f_l0 = self.stem_long(x_long)
+        # short branch
+        if self.use_short:
+            f_s0 = self.stem_short(x_short)
+            f_s0 = self._align_to_mid(f_s0, target_hw)
+            f_s = self.branch_short(f_s0)
+        else:
+            f_s = torch.zeros_like(f_mid_base)
 
-        f_s0 = self._align_to_mid(f_s0, target_hw)
-        f_l0 = self._align_to_mid(f_l0, target_hw)
-
-        f_s = self.branch_short(f_s0)
+        # mid branch
         f_m = self.branch_mid(f_mid_base)
-        f_l = self.branch_long(f_l0)
 
-        a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
+        # long branch
+        if self.use_long:
+            f_l0 = self.stem_long(x_long)
+            f_l0 = self._align_to_mid(f_l0, target_hw)
+            f_l = self.branch_long(f_l0)
+        else:
+            f_l = torch.zeros_like(f_mid_base)
+
+        branch_mask = torch.tensor(
+            [self.use_short, True, self.use_long],
+            device=f_mid_base.device,
+            dtype=torch.bool
+        ).unsqueeze(0).repeat(f_mid_base.size(0), 1)
+
+        a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l, branch_mask=branch_mask)
 
         f_fused = a_s * f_s + a_m * f_m + a_l * f_l
         return f_fused
