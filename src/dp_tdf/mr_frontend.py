@@ -81,10 +81,12 @@ class MRFrontend(nn.Module):
         weight_hidden_dim=128,
         bias=False,
         align_mode="bilinear",
+        fused_mode="weighted",
     ):
         super().__init__()
 
         self.align_mode = align_mode
+        self.fused_mode = fused_mode
 
         # 只有 long / short 需要额外 stem
         self.stem_short = nn.Sequential(
@@ -121,7 +123,7 @@ class MRFrontend(nn.Module):
         返回：
         F_fused: shape=(B, g, F_m, T_m)
         """
-        target_hw = f_mid_base.shape[-2:]  # (F_m, T_m)
+        target_hw = f_mid_base.shape[-2:]
 
         f_s0 = self.stem_short(x_short)
         f_l0 = self.stem_long(x_long)
@@ -135,5 +137,9 @@ class MRFrontend(nn.Module):
 
         a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
 
-        f_fused = a_s * f_s + a_m * f_m + a_l * f_l
+        if self.fused_mode == "long_only":
+            f_fused = f_l
+        else:
+            f_fused = a_s * f_s + a_m * f_m + a_l * f_l
+
         return f_fused

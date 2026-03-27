@@ -33,3 +33,4 @@ mr_frontend:
   num_branch_layers: 2  #每一路分支两层卷积块
   weight_hidden_dim: 128  #权重网络隐藏层128
   align_mode: bilinear  #对齐方式bilinear
+  fused_mode: long_only
