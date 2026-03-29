@@ -7,11 +7,11 @@ optimizer: adamW
 
 dim_f: 864
 dim_t: 256
-n_fft: 6144
-n_fft_short: 4096
-n_fft_long: 8192
+n_fft: 8192
+n_fft_short: 6144
+n_fft_long: 12288
 hop_length: 1024
-overlap: 3072
+overlap: 4096
 
 audio_ch: 2
 
