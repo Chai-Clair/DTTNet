@@ -123,7 +123,11 @@ class MRFrontend(nn.Module):
         self.branch_long = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
 
         self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim)
-        self.long_gate = LongGate(g, hidden_dim=weight_hidden_dim)
+
+        if fused_mode == "long_only_gate":
+            self.long_gate = LongGate(g, hidden_dim=weight_hidden_dim)
+        else:
+            self.long_gate = None
 
     def _align_to_mid(self, x, target_hw):
         # x: (B, C, F, T)
@@ -156,9 +160,10 @@ class MRFrontend(nn.Module):
             # 原始 long_only 消融：Ffused = Fl
             f_fused = f_l
 
+
         elif self.fused_mode == "long_only_gate":
-            # 新方案：Ffused = a_l(x) * Fl
-            a_long = self.long_gate(f_l)  # (B,1,1,1), in [0,1]
+            assert self.long_gate is not None
+            a_long = self.long_gate(f_l)
             f_fused = a_long * f_l
 
         else:
