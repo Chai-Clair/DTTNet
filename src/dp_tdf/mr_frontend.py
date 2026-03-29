@@ -22,7 +22,7 @@ class ConvBNAct(nn.Module):
 class MRBranch(nn.Module):
     """
     单路浅层卷积分支
-    第一版建议：2层 3x3 Conv
+    第一版: 2层 3x3 Conv
     """
     def __init__(self, channels, bn_norm, num_layers=2, bias=False):
         super().__init__()
@@ -61,11 +61,27 @@ class WeightNet(nn.Module):
         a_l = alpha[:, 2].view(-1, 1, 1, 1)
         return a_s, a_m, a_l
 
+class LongGate(nn.Module):
+    """
+    单独给 long 分支用的动态门控
+    输入: f_l, shape=(B, C, F, T)
+    输出: a_l(x), shape=(B, 1, 1, 1), sigmoid范围[0,1]
+    """
+    def __init__(self, channels, hidden_dim=128):
+        super().__init__()
+        self.fc1 = nn.Linear(channels, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, 1)
+
+    def forward(self, f_l):
+        # GAP: (B, C, F, T) -> (B, C)
+        z_l = f_l.mean(dim=(-1, -2))
+        h = F.relu(self.fc1(z_l))
+        a_l = torch.sigmoid(self.fc2(h)).view(-1, 1, 1, 1)
+        return a_l
 
 class MRFrontend(nn.Module):
     """
     多分辨率前端
-    说明：
     - 中窗路不再单独做stem，直接使用DTT原始first_conv之后的特征f_base
     - 长窗、短窗各自做1x1stem
     - 然后统一对齐到中窗域
@@ -107,6 +123,7 @@ class MRFrontend(nn.Module):
         self.branch_long = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
 
         self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim)
+        self.long_gate = LongGate(g, hidden_dim=weight_hidden_dim)
 
     def _align_to_mid(self, x, target_hw):
         # x: (B, C, F, T)
@@ -135,11 +152,18 @@ class MRFrontend(nn.Module):
         f_m = self.branch_mid(f_mid_base)
         f_l = self.branch_long(f_l0)
 
-        a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
-
         if self.fused_mode == "long_only":
+            # 原始 long_only 消融：Ffused = Fl
             f_fused = f_l
+
+        elif self.fused_mode == "long_only_gate":
+            # 新方案：Ffused = a_l(x) * Fl
+            a_long = self.long_gate(f_l)  # (B,1,1,1), in [0,1]
+            f_fused = a_long * f_l
+
         else:
+            # full 原始三路动态融合
+            a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
             f_fused = a_s * f_s + a_m * f_m + a_l * f_l
 
         return f_fused
