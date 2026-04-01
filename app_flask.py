@@ -181,34 +181,43 @@ def run_job(job_id: str):
         scores_dir = workdir / "scores"
 
         # vocals
-        v = transcribe_vocals(stem_paths["vocals"], str(scores_dir / "vocals"))
-        if v.get("musicxml"):
-            rel_path = str(Path(v["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["vocals"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            v = transcribe_vocals(stem_paths["vocals"], str(scores_dir / "vocals"))
+            if v.get("musicxml"):
+                rel_path = str(Path(v["musicxml"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["vocals"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] vocals transcription failed: {e}")
 
         # drums
-        d = transcribe_drums(stem_paths["drums"], str(scores_dir / "drums"))
-        if d.get("musicxml"):
-            rel_path = str(Path(d["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["drums"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            d = transcribe_drums(stem_paths["drums"], str(scores_dir / "drums"))
+            if d.get("musicxml"):
+                rel_path = str(Path(d["musicxml"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["drums"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] drums transcription failed: {e}")
 
         # bass
-        b = transcribe_bass(stem_paths["bass"], str(scores_dir / "bass"))
-        if b.get("musicxml"):
-            rel_path = str(Path(b["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["bass"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            b = transcribe_bass(stem_paths["bass"], str(scores_dir / "bass"))
+            if b.get("musicxml"):
+                rel_path = str(Path(b["musicxml"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["bass"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] bass transcription failed: {e}")
 
         zip_path = build_zip(workdir)
         rel_zip = str(zip_path.relative_to(workdir))

@@ -3,6 +3,7 @@ import os
 import subprocess
 import numpy as np
 import librosa
+import soundfile as sf
 
 from basic_pitch.inference import predict_and_save
 from basic_pitch import ICASSP_2022_MODEL_PATH
@@ -72,7 +73,15 @@ def transcribe_bass(wav_path: str, out_prefix: str) -> dict:
 
 
 def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
-    y, sr = librosa.load(wav_path, sr=22050, mono=True)
+    # 直接按原始采样率读取，避免 librosa.load(..., sr=22050) 触发重采样崩溃
+    y, sr = sf.read(wav_path)
+
+    # 转单声道
+    if y.ndim > 1:
+        y = np.mean(y, axis=1)
+
+    # 转成 float32
+    y = y.astype(np.float32, copy=False)
 
     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
     onset_frames = librosa.onset.onset_detect(
