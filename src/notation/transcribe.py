@@ -17,36 +17,12 @@ def midi_to_musicxml(midi_path: str, xml_path: str):
     score.write("musicxml", fp=xml_path)
     return xml_path
 
-
-def _prepare_basic_pitch_input(wav_path: str, out_dir: Path) -> Path:
-    """
-    先把输入音频转成 basic_pitch 目标格式：
-    - mono
-    - sample rate = AUDIO_SAMPLE_RATE
-    - wav
-    避免 basic_pitch 内部再走 librosa/resampy 重采样链。
-    """
+def _transcribe_basic_pitch_stem(wav_path: str, out_prefix: str, stem_name: str) -> dict:
+    # 每个 stem 用自己的独立目录
+    out_dir = Path(out_prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
-    prepared_wav = out_dir / "basic_pitch_input.wav"
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", wav_path,
-        "-ac", "1",
-        "-ar", str(AUDIO_SAMPLE_RATE),
-        str(prepared_wav),
-    ]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    return prepared_wav
-
-
-def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
-    out_dir = Path(out_prefix).parent
-    os.makedirs(out_dir, exist_ok=True)
-
-    prepared_wav = _prepare_basic_pitch_input(wav_path, out_dir)
+    prepared_wav = _prepare_basic_pitch_input(wav_path, out_dir, stem_name)
 
     predict_and_save(
         audio_path_list=[str(prepared_wav)],
@@ -60,17 +36,44 @@ def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
 
     midi_files = sorted(out_dir.glob("*.mid"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not midi_files:
+        print(f"[WARN] {stem_name} 没有生成 mid，目录: {out_dir}")
+        print(f"[WARN] 当前目录文件: {[p.name for p in out_dir.iterdir()]}")
         return {"midi": None, "musicxml": None}
 
     midi_path = midi_files[0]
-    xml_path = Path(f"{out_prefix}.musicxml")
+    xml_path = out_dir / f"{stem_name}.musicxml"
     midi_to_musicxml(str(midi_path), str(xml_path))
+
     return {"midi": str(midi_path), "musicxml": str(xml_path)}
 
+def _prepare_basic_pitch_input(wav_path: str, out_dir: Path, stem_name: str) -> Path:
+    """
+    先把输入音频转成 basic_pitch 目标格式：
+    - mono
+    - sample rate = AUDIO_SAMPLE_RATE
+    - wav
+    避免 basic_pitch 内部再走 librosa/resampy 重采样链。
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prepared_wav = out_dir / f"{stem_name}_input.wav"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", wav_path,
+        "-ac", "1",
+        "-ar", str(AUDIO_SAMPLE_RATE),
+        str(prepared_wav),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    return prepared_wav
+
+def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
+    return _transcribe_basic_pitch_stem(wav_path, out_prefix, "vocals")
 
 def transcribe_bass(wav_path: str, out_prefix: str) -> dict:
-    return transcribe_vocals(wav_path, out_prefix)
-
+    return _transcribe_basic_pitch_stem(wav_path, out_prefix, "bass")
 
 def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
     # 直接按原始采样率读取，避免 librosa.load(..., sr=22050) 触发重采样崩溃
