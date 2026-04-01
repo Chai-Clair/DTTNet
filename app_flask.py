@@ -31,17 +31,17 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MB
 # =========================
 # 固定配置
 # =========================
-OUTPUT_ROOT = BASE_DIR / "demo_outputs"
-OUTPUT_ROOT.mkdir(exist_ok=True)
+OUTPUT_ROOT = Path("/home/ubuntu/CZJ/demo_outputs")
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 CKPT_MAP = {
-    "vocals": r"E:\2232813\projects\DTTNET\checkpoints\vocal.ckpt",
-    "drums": r"E:\2232813\projects\DTTNET\checkpoints\drum.ckpt",
-    "bass": r"E:\2232813\projects\DTTNET\checkpoints\bass.ckpt",
-    "other": r"E:\2232813\projects\DTTNET\checkpoints\other.ckpt",
+    "vocals": "/home/ubuntu/CZJ/DTT/checkpoints/vocal.ckpt",
+    "drums": "/home/ubuntu/CZJ/DTT/checkpoints/drum.ckpt",
+    "bass": "/home/ubuntu/CZJ/DTT/checkpoints/bass.ckpt",
+    "other": "/home/ubuntu/CZJ/DTT/checkpoints/other.ckpt",
 }
 
-DEVICE = "cuda:0"   # 不稳就改成 "cpu"
+DEVICE = "cuda:0"
 SAMPLERATE = 44100
 ALLOWED_EXTENSIONS = {"wav"}
 
@@ -328,4 +328,4 @@ def download_file(job_id: str, subpath: str):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)
