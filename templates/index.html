@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DTTNet Flask Demo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+  <div class="page-header">
+    <h1>AMR-DTTNet盲源分离平台</h1>
+  </div>
+  <div class="page">
+    <div class="left-panel card">
+
+      <form id="upload-form">
+        <label class="upload-box" id="upload-box">
+          <span id="upload-box-text">点击或拖拽.wav文件到这里</span>
+          <input id="audio-file" type="file" name="file" accept=".wav,audio/wav" />
+        </label>
+
+        <div id="file-name" class="file-name">尚未选择文件</div>
+
+        <div class="mix-preview">
+          <div class="section-title">混音试听</div>
+          <div id="mix-waveform" class="waveform"></div>
+          <audio id="mix-audio" controls preload="metadata"></audio>
+        </div>
+
+        <button id="start-btn" class="primary-btn" type="submit" disabled>开始分离</button>
+      </form>
+
+      <div class="status-box">
+        <div class="status-title">任务状态</div>
+        <div id="status-text"></div>
+        <div id="error-text" class="error-text"></div>
+      </div>
+
+      <div class="zip-box">
+        <a id="zip-link" class="download-btn disabled" href="javascript:void(0)">下载全部结果.ZIP</a>
+      </div>
+    </div>
+
+    <div class="right-panel">
+        <div class="stem-card card waiting" id="vocals-card" data-stem="vocals">
+          <div class="stem-top">
+            <div class="stem-title-wrap">
+              <h2>vocals</h2>
+              <span class="stem-status hidden" id="vocals-status"></span>
+            </div>
+            <div class="stem-meta">
+              <span class="duration-label">时长：</span>
+              <span id="vocals-duration">--:--</span>
+            </div>
+          </div>
+
+          <div class="stem-main-row">
+            <div class="audio-wrap">
+              <div id="vocals-waveform" class="waveform"></div>
+              <audio id="vocals-audio" controls preload="metadata"></audio>
+            </div>
+            <div class="stem-btn-group">
+              <a class="audio-download-btn disabled" id="vocals-audio-download" href="javascript:void(0)">下载音频</a>
+              <a class="score-btn disabled" id="vocals-score-btn" href="javascript:void(0)">下载谱面</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="stem-card card waiting" id="drums-card" data-stem="drums">
+          <div class="stem-top">
+            <div class="stem-title-wrap">
+              <h2>drums</h2>
+              <span class="stem-status hidden" id="drums-status"></span>
+            </div>
+            <div class="stem-meta">
+              <span class="duration-label">时长：</span>
+              <span id="drums-duration">--:--</span>
+            </div>
+          </div>
+
+          <div class="stem-main-row">
+            <div class="audio-wrap">
+              <div id="drums-waveform" class="waveform"></div>
+              <audio id="drums-audio" controls preload="metadata"></audio>
+            </div>
+            <div class="stem-btn-group">
+              <a class="audio-download-btn disabled" id="drums-audio-download" href="javascript:void(0)">下载音频</a>
+              <a class="score-btn disabled" id="drums-score-btn" href="javascript:void(0)">下载谱面</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="stem-card card waiting" id="bass-card" data-stem="bass">
+          <div class="stem-top">
+            <div class="stem-title-wrap">
+              <h2>bass</h2>
+              <span class="stem-status hidden" id="bass-status"></span>
+            </div>
+            <div class="stem-meta">
+              <span class="duration-label">时长：</span>
+              <span id="bass-duration">--:--</span>
+            </div>
+          </div>
+
+          <div class="stem-main-row">
+            <div class="audio-wrap">
+              <div id="bass-waveform" class="waveform"></div>
+              <audio id="bass-audio" controls preload="metadata"></audio>
+            </div>
+            <div class="stem-btn-group">
+              <a class="audio-download-btn disabled" id="bass-audio-download" href="javascript:void(0)">下载音频</a>
+              <a class="score-btn disabled" id="bass-score-btn" href="javascript:void(0)">下载谱面</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="stem-card card waiting" id="other-card" data-stem="other">
+          <div class="stem-top">
+            <div class="stem-title-wrap">
+              <h2>other</h2>
+              <span class="stem-status hidden" id="other-status"></span>
+            </div>
+            <div class="stem-meta">
+              <span class="duration-label">时长：</span>
+              <span id="other-duration">--:--</span>
+            </div>
+          </div>
+
+          <div class="stem-main-row">
+            <div class="audio-wrap">
+              <div id="other-waveform" class="waveform"></div>
+              <audio id="other-audio" controls preload="metadata"></audio>
+            </div>
+            <div class="stem-btn-group">
+              <a class="audio-download-btn disabled" id="other-audio-download" href="javascript:void(0)">下载音频</a>
+              <span class="btn-placeholder" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+    </div>
+
+  </div>
+
+  <script>
+      const START_URL = "/api/start";
+      const STATUS_PREFIX = "/api/status/";
+  </script>
+  <script src="https://unpkg.com/wavesurfer.js@7"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+

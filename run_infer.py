@@ -1,56 +1,49 @@
-
-import os
-import hydra
-from omegaconf import DictConfig, OmegaConf
-import soundfile as sf
-from src.utils.utils import load_wav, get_unique_save_path
-from src.utils.omega_resolvers import get_eval_log_dir
 from pathlib import Path
 
-import dotenv
-from src.evaluation.separate import separate_with_ckpt_TDF, no_overlap_inference, overlap_inference
-dotenv.load_dotenv(override=True)
+import hydra
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
+
+from src.serving.separator_service import StemSeparator
 
 
-@hydra.main(config_path="configs/", config_name="infer.yaml", version_base='1.1')
+@hydra.main(version_base=None, config_path="configs", config_name="infer")
 def main(config: DictConfig):
-    # Imports should be nested inside @hydra.main to optimize tab completion
-    # Read more here: https://github.com/facebookresearch/hydra/issues/934
+    stem = config.model.target_name
 
-    from src.utils import utils
+    overlap_add = None
+    if config.get("overlap_add") is not None:
+        overlap_add = OmegaConf.to_container(config.overlap_add, resolve=True)
 
-    # Pretty print config using Rich library
-    if config.get("print_config"):
-        utils.print_config(config, resolve=True)
+        # 把 tmp_root 也转成绝对路径，避免 Hydra 切 cwd 后跑偏
+        if overlap_add.get("tmp_root") is not None:
+            overlap_add["tmp_root"] = to_absolute_path(overlap_add["tmp_root"])
 
+    separator = StemSeparator(
+        ckpt_map={
+            stem: to_absolute_path(config.ckpt_path)
+        },
+        device=config.device,
+        batch_size=config.batch_size,
+        double_chunk=config.double_chunk,
+        overlap_add=overlap_add,
+        samplerate=config.samplerate,
+    )
 
-    model = hydra.utils.instantiate(config.model)
-    ckpt_path = Path(config.ckpt_path)
-    print(ckpt_path)
-    mixture = load_wav(config.mixture_path)
-    target_hat = separate_with_ckpt_TDF(config.batch_size, model, ckpt_path, mixture, config.device,
-                                        config.double_chunk, config.overlap_add)
+    mixture_path = to_absolute_path(config.mixture_path)
 
+    # 输出目录：项目根目录/infer/<stem>/
+    out_dir = Path(to_absolute_path("infer")) / stem
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    base_name, file_name = os.path.split(config.mixture_path)
-    #remove extension
-    dir = os.path.splitext(file_name)[0]
-    # print(config)
+    out_path = separator.separate_one(
+        audio_path=mixture_path,
+        stem=stem,
+        out_dir=str(out_dir),
+    )
 
-    save_path = os.path.join(config.paths.root_dir, "infer")
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
-    dir = os.path.join(save_path, dir)
-    cur_suffix = get_unique_save_path(dir)
-    save_path = f"{dir}_{str(cur_suffix)}"
+    print(f"[OK] separated stem saved to: {out_path}")
 
-    if not os.path.exists(save_path):
-        os.mkdir(save_path)
-
-    save_path = os.path.join(save_path, model.target_name + ".wav")
-    sf.write(save_path, target_hat.T, 44100)
-
-    print(f"Saved to {save_path}")
 
 if __name__ == "__main__":
     main()
