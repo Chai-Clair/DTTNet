@@ -9,7 +9,21 @@ from src.dp_tdf.abstract import AbstractModel
 from src.dp_tdf.mr_frontend import MRFrontend
 
 class DPTDFNet(AbstractModel):
-    def __init__(self, num_blocks, l, g, k, bn, bias, bn_norm, bandsequence, block_type, mr_frontend=None, **kwargs):
+    def __init__(
+            self,
+            num_blocks,
+            l,
+            g,
+            k,
+            bn,
+            bias,
+            bn_norm,
+            bandsequence,
+            block_type,
+            mr_frontend=None,
+            fusion_low_bins=None,
+            **kwargs
+    ):
 
         super(DPTDFNet, self).__init__(**kwargs)
         # self.save_hyperparameters()
@@ -40,6 +54,7 @@ class DPTDFNet(AbstractModel):
         )
 
         self.use_mr_frontend = mr_frontend is not None
+        self.fusion_low_bins = fusion_low_bins
 
         if self.use_mr_frontend:
             self.mr_frontend = MRFrontend(
@@ -49,8 +64,23 @@ class DPTDFNet(AbstractModel):
                 bias=bias,
                 **mr_frontend
             )
-            # 残差缩放系数，第一版用可学习标量
+            # 静态可学习残差缩放系数 lambda
             self.fusion_scale = nn.Parameter(torch.tensor(0.1))
+
+            # 固定频带 mask：shape = (1, 1, dim_f, 1)
+            if self.fusion_low_bins is not None:
+                assert self.fusion_low_bins > 0, "fusion_low_bins must be positive"
+                assert self.fusion_low_bins <= self.dim_f, (
+                    f"fusion_low_bins={self.fusion_low_bins} must be <= dim_f={self.dim_f}"
+                )
+
+                fusion_freq_mask = torch.zeros(1, 1, self.dim_f, 1)
+                fusion_freq_mask[:, :, :self.fusion_low_bins, :] = 1.0
+                self.register_buffer("fusion_freq_mask", fusion_freq_mask)
+            else:
+                self.fusion_freq_mask = None
+        else:
+            self.fusion_freq_mask = None
 
         f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
         c = g   #first_conv后的通道数
@@ -113,6 +143,8 @@ class DPTDFNet(AbstractModel):
             f_base = self.first_conv(x_mid)
             if self.use_mr_frontend:
                 f_fused = self.mr_frontend(x_short, f_base, x_long)
+                if self.fusion_freq_mask is not None:
+                    f_fused = f_fused * self.fusion_freq_mask
                 x = f_base + self.fusion_scale * f_fused
             else:
                 x = f_base

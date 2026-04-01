@@ -29,6 +29,8 @@ bandsequence:
   num_layers: 4
   n_heads: 2
 
+fusion_low_bins: 256
+
 mr_frontend:
   num_branch_layers: 2  #每一路分支两层卷积块
   weight_hidden_dim: 128  #权重网络隐藏层128
