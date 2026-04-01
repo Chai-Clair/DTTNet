@@ -1,12 +1,14 @@
 from pathlib import Path
 import os
+import subprocess
 import numpy as np
 import librosa
 
 from basic_pitch.inference import predict_and_save
 from basic_pitch import ICASSP_2022_MODEL_PATH
+from basic_pitch.constants import AUDIO_SAMPLE_RATE
 
-from music21 import converter, stream, note, meter, clef, tempo, instrument, percussion
+from music21 import converter, stream, note, meter, clef, tempo, instrument
 
 
 def midi_to_musicxml(midi_path: str, xml_path: str):
@@ -15,12 +17,38 @@ def midi_to_musicxml(midi_path: str, xml_path: str):
     return xml_path
 
 
+def _prepare_basic_pitch_input(wav_path: str, out_dir: Path) -> Path:
+    """
+    先把输入音频转成 basic_pitch 目标格式：
+    - mono
+    - sample rate = AUDIO_SAMPLE_RATE
+    - wav
+    避免 basic_pitch 内部再走 librosa/resampy 重采样链。
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prepared_wav = out_dir / "basic_pitch_input.wav"
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", wav_path,
+        "-ac", "1",
+        "-ar", str(AUDIO_SAMPLE_RATE),
+        str(prepared_wav),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    return prepared_wav
+
+
 def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
     out_dir = Path(out_prefix).parent
     os.makedirs(out_dir, exist_ok=True)
 
+    prepared_wav = _prepare_basic_pitch_input(wav_path, out_dir)
+
     predict_and_save(
-        audio_path_list=[wav_path],
+        audio_path_list=[str(prepared_wav)],
         output_directory=str(out_dir),
         save_midi=True,
         sonify_midi=False,
@@ -29,7 +57,6 @@ def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
         model_or_model_path=ICASSP_2022_MODEL_PATH,
     )
 
-    # 不要假设文件名，直接找生成的 midi
     midi_files = sorted(out_dir.glob("*.mid"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not midi_files:
         return {"midi": None, "musicxml": None}
@@ -41,7 +68,6 @@ def transcribe_vocals(wav_path: str, out_prefix: str) -> dict:
 
 
 def transcribe_bass(wav_path: str, out_prefix: str) -> dict:
-    # 第一版直接复用 basic-pitch
     return transcribe_vocals(wav_path, out_prefix)
 
 
@@ -62,9 +88,8 @@ def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
     pt.append(meter.TimeSignature("4/4"))
     pt.append(tempo.MetronomeMark(number=120))
 
-    # 120 BPM 下：1 秒 = 2 个 quarterLength
     ql_per_sec = 120.0 / 60.0
-    grid = 0.25  # 十六分音符网格
+    grid = 0.25
     used_offsets = set()
 
     for t in onset_times:
@@ -99,24 +124,18 @@ def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
             n.displayStep = "G"
             n.displayOctave = 5
 
-        # 统一写成十六分音符
         n.quarterLength = grid
 
-        # 把任意浮点秒数映射到十六分音符网格
         offset_ql = t * ql_per_sec
         offset_ql = round(offset_ql / grid) * grid
 
-        # 避免同一网格重复插入太多元素，先做个简化
         if offset_ql in used_offsets:
             continue
         used_offsets.add(offset_ql)
 
         pt.insert(offset_ql, n)
 
-    # 再保险：让 music21 把 offsets / durations 吸附到十六分音符网格
     pt.quantize((4,), processOffsets=True, processDurations=True, inPlace=True)
-
-    # 组织成小节，减少导出异常
     pt.makeMeasures(inPlace=True)
 
     sc.insert(0, pt)
