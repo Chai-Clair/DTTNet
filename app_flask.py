@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from threading import Thread, Lock
+import subprocess
 
 from flask import (
     Flask, render_template, request, jsonify,
@@ -43,7 +44,7 @@ CKPT_MAP = {
 
 DEVICE = "cuda:0"
 SAMPLERATE = 44100
-ALLOWED_EXTENSIONS = {"wav"}
+ALLOWED_EXTENSIONS = {"wav", "mp3", "m4a"}
 
 # =========================
 # 任务状态
@@ -55,6 +56,20 @@ JOBS_LOCK = Lock()
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def convert_audio_to_wav(src_path: Path, dst_path: Path, samplerate: int = 44100):
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(src_path),
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", str(samplerate),
+        "-ac", "2",
+        str(dst_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def make_workdir(job_id: str) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -264,13 +279,25 @@ def api_start():
     workdir = make_workdir(job_id)
 
     filename = secure_filename(file.filename)
-    suffix = Path(filename).suffix or ".wav"
-    saved_path = workdir / "uploads" / f"input{suffix}"
-    file.save(saved_path)
+    suffix = Path(filename).suffix.lower() or ".wav"
+
+    raw_upload_path = workdir / "uploads" / f"input_raw{suffix}"
+    wav_path = workdir / "uploads" / "input.wav"
+
+    file.save(raw_upload_path)
+
+    try:
+        if suffix == ".wav":
+            # wav 也统一转一次，保证格式一致
+            convert_audio_to_wav(raw_upload_path, wav_path, samplerate=SAMPLERATE)
+        else:
+            convert_audio_to_wav(raw_upload_path, wav_path, samplerate=SAMPLERATE)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"音频转 WAV 失败: {e}"}), 400
 
     with JOBS_LOCK:
         JOBS[job_id] = init_job_state(job_id, workdir)
-        JOBS[job_id]["uploaded_audio"] = str(saved_path)
+        JOBS[job_id]["uploaded_audio"] = str(wav_path)
 
     t = Thread(target=run_job, args=(job_id,), daemon=True)
     t.start()
