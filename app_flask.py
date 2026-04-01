@@ -183,8 +183,8 @@ def run_job(job_id: str):
         # vocals
         try:
             v = transcribe_vocals(stem_paths["vocals"], str(scores_dir / "vocals"))
-            if v.get("musicxml"):
-                rel_path = str(Path(v["musicxml"]).relative_to(workdir))
+            if v.get("pdf"):
+                rel_path = str(Path(v["pdf"]).relative_to(workdir))
                 update_job(job_id, lambda j: j["stems"]["vocals"].update({
                     "score_ready": True,
                     "score_url": rel_media_url(job_id, rel_path),
@@ -196,8 +196,8 @@ def run_job(job_id: str):
         # drums
         try:
             d = transcribe_drums(stem_paths["drums"], str(scores_dir / "drums"))
-            if d.get("musicxml"):
-                rel_path = str(Path(d["musicxml"]).relative_to(workdir))
+            if d.get("pdf"):
+                rel_path = str(Path(d["pdf"]).relative_to(workdir))
                 update_job(job_id, lambda j: j["stems"]["drums"].update({
                     "score_ready": True,
                     "score_url": rel_media_url(job_id, rel_path),
@@ -209,8 +209,8 @@ def run_job(job_id: str):
         # bass
         try:
             b = transcribe_bass(stem_paths["bass"], str(scores_dir / "bass"))
-            if b.get("musicxml"):
-                rel_path = str(Path(b["musicxml"]).relative_to(workdir))
+            if b.get("pdf"):
+                rel_path = str(Path(b["pdf"]).relative_to(workdir))
                 update_job(job_id, lambda j: j["stems"]["bass"].update({
                     "score_ready": True,
                     "score_url": rel_media_url(job_id, rel_path),

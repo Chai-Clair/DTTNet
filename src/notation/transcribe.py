@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import numpy as np
 import librosa
@@ -17,8 +18,42 @@ def midi_to_musicxml(midi_path: str, xml_path: str):
     score.write("musicxml", fp=xml_path)
     return xml_path
 
+def _find_musescore_bin() -> str:
+    env_bin = os.getenv("MUSESCORE_BIN")
+    if env_bin and Path(env_bin).exists():
+        return env_bin
+
+    candidates = [
+        "musescore",
+        "mscore",
+        "mscore3",
+        "musescore3",
+        "MuseScore4",
+        "MuseScore3",
+    ]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+
+    raise FileNotFoundError(
+        "未找到 MuseScore 命令，请先安装 musescore/mscore3，"
+        "或设置环境变量 MUSESCORE_BIN"
+    )
+
+def musicxml_to_pdf(xml_path: str, pdf_path: str) -> str:
+    musescore_bin = _find_musescore_bin()
+
+    cmd = [
+        musescore_bin,
+        xml_path,
+        "-o",
+        pdf_path,
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return pdf_path
+
 def _transcribe_basic_pitch_stem(wav_path: str, out_prefix: str, stem_name: str) -> dict:
-    # 每个 stem 用自己的独立目录
     out_dir = Path(out_prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -38,13 +73,20 @@ def _transcribe_basic_pitch_stem(wav_path: str, out_prefix: str, stem_name: str)
     if not midi_files:
         print(f"[WARN] {stem_name} 没有生成 mid，目录: {out_dir}")
         print(f"[WARN] 当前目录文件: {[p.name for p in out_dir.iterdir()]}")
-        return {"midi": None, "musicxml": None}
+        return {"midi": None, "musicxml": None, "pdf": None}
 
     midi_path = midi_files[0]
     xml_path = out_dir / f"{stem_name}.musicxml"
-    midi_to_musicxml(str(midi_path), str(xml_path))
+    pdf_path = out_dir / f"{stem_name}.pdf"
 
-    return {"midi": str(midi_path), "musicxml": str(xml_path)}
+    midi_to_musicxml(str(midi_path), str(xml_path))
+    musicxml_to_pdf(str(xml_path), str(pdf_path))
+
+    return {
+        "midi": str(midi_path),
+        "musicxml": str(xml_path),
+        "pdf": str(pdf_path),
+    }
 
 def _prepare_basic_pitch_input(wav_path: str, out_dir: Path, stem_name: str) -> Path:
     """
@@ -76,14 +118,14 @@ def transcribe_bass(wav_path: str, out_prefix: str) -> dict:
     return _transcribe_basic_pitch_stem(wav_path, out_prefix, "bass")
 
 def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
-    # 直接按原始采样率读取，避免 librosa.load(..., sr=22050) 触发重采样崩溃
+    out_dir = Path(out_prefix)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     y, sr = sf.read(wav_path)
 
-    # 转单声道
     if y.ndim > 1:
         y = np.mean(y, axis=1)
 
-    # 转成 float32
     y = y.astype(np.float32, copy=False)
 
     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
@@ -152,6 +194,10 @@ def transcribe_drums(wav_path: str, out_prefix: str) -> dict:
 
     sc.insert(0, pt)
 
-    xml_path = Path(f"{out_prefix}.musicxml")
+    xml_path = out_dir / "drums.musicxml"
+    pdf_path = out_dir / "drums.pdf"
+
     sc.write("musicxml", fp=str(xml_path))
-    return {"midi": None, "musicxml": str(xml_path)}
+    musicxml_to_pdf(str(xml_path), str(pdf_path))
+
+    return {"midi": None, "musicxml": str(xml_path), "pdf": str(pdf_path)}
