@@ -340,9 +340,28 @@ uploadBox.addEventListener("drop", (e) => {
   if (!files || !files.length) return;
 
   const file = files[0];
-  const isWav = file.name.toLowerCase().endsWith(".wav") || file.type === "audio/wav";
-  if (!isWav) {
-    errorText.textContent = "仅支持上传 .wav 文件";
+  const name = file.name.toLowerCase();
+  const allowedExt = [".wav", ".mp3", ".m4a"];
+  const allowedMime = [
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/aac",
+    ""
+  ];
+
+  const hasAllowedExt = allowedExt.some(ext => name.endsWith(ext));
+  const hasAllowedMime = allowedMime.includes(file.type);
+
+  if (!(hasAllowedExt || hasAllowedMime)) {
+    errorText.textContent = "仅支持上传 .wav / .mp3 / .m4a 文件";
+    fileName.textContent = "尚未选择文件";
+    startBtn.disabled = true;
+    mixAudio.removeAttribute("src");
+    mixAudio.load();
     return;
   }
 
