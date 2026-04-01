@@ -44,7 +44,7 @@ CKPT_MAP = {
 
 DEVICE = "cuda:0"
 SAMPLERATE = 44100
-ALLOWED_EXTENSIONS = {"wav", "mp3", "m4a"}
+ALLOWED_EXTENSIONS = {"wav", "mp3", "m4a", "mp4"}
 
 # =========================
 # 任务状态
