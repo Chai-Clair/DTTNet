@@ -7,6 +7,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 from threading import Thread, Lock
+import subprocess
 
 from flask import (
     Flask, render_template, request, jsonify,
@@ -32,7 +33,7 @@ app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MB
 # 固定配置
 # =========================
 OUTPUT_ROOT = BASE_DIR / "demo_outputs"
-OUTPUT_ROOT.mkdir(exist_ok=True)
+OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 CKPT_MAP = {
     "vocals": r"E:\2232813\projects\DTTNET\checkpoints\vocal.ckpt",
@@ -41,9 +42,9 @@ CKPT_MAP = {
     "other": r"E:\2232813\projects\DTTNET\checkpoints\other.ckpt",
 }
 
-DEVICE = "cuda:0"   # 不稳就改成 "cpu"
+DEVICE = "cuda:0"
 SAMPLERATE = 44100
-ALLOWED_EXTENSIONS = {"wav"}
+ALLOWED_EXTENSIONS = {"wav", "mp3", "m4a", "mp4"}
 
 # =========================
 # 任务状态
@@ -55,6 +56,20 @@ JOBS_LOCK = Lock()
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def convert_audio_to_wav(src_path: Path, dst_path: Path, samplerate: int = 44100):
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", str(src_path),
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar", str(samplerate),
+        "-ac", "2",
+        str(dst_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def make_workdir(job_id: str) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -181,34 +196,47 @@ def run_job(job_id: str):
         scores_dir = workdir / "scores"
 
         # vocals
-        v = transcribe_vocals(stem_paths["vocals"], str(scores_dir / "vocals"))
-        if v.get("musicxml"):
-            rel_path = str(Path(v["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["vocals"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            v = transcribe_vocals(
+                stem_paths["vocals"],
+                str(uploaded_audio),
+                str(scores_dir / "vocals"),
+            )
+            if v.get("pdf"):
+                rel_path = str(Path(v["pdf"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["vocals"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] vocals transcription failed: {e}")
 
         # drums
-        d = transcribe_drums(stem_paths["drums"], str(scores_dir / "drums"))
-        if d.get("musicxml"):
-            rel_path = str(Path(d["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["drums"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            d = transcribe_drums(stem_paths["drums"], str(scores_dir / "drums"))
+            if d.get("pdf"):
+                rel_path = str(Path(d["pdf"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["drums"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] drums transcription failed: {e}")
 
         # bass
-        b = transcribe_bass(stem_paths["bass"], str(scores_dir / "bass"))
-        if b.get("musicxml"):
-            rel_path = str(Path(b["musicxml"]).relative_to(workdir))
-            update_job(job_id, lambda j: j["stems"]["bass"].update({
-                "score_ready": True,
-                "score_url": rel_media_url(job_id, rel_path),
-                "score_download_url": rel_download_url(job_id, rel_path),
-            }))
+        try:
+            b = transcribe_bass(stem_paths["bass"], str(scores_dir / "bass"))
+            if b.get("pdf"):
+                rel_path = str(Path(b["pdf"]).relative_to(workdir))
+                update_job(job_id, lambda j: j["stems"]["bass"].update({
+                    "score_ready": True,
+                    "score_url": rel_media_url(job_id, rel_path),
+                    "score_download_url": rel_download_url(job_id, rel_path),
+                }))
+        except Exception as e:
+            print(f"[WARN] bass transcription failed: {e}")
 
         zip_path = build_zip(workdir)
         rel_zip = str(zip_path.relative_to(workdir))
@@ -255,13 +283,25 @@ def api_start():
     workdir = make_workdir(job_id)
 
     filename = secure_filename(file.filename)
-    suffix = Path(filename).suffix or ".wav"
-    saved_path = workdir / "uploads" / f"input{suffix}"
-    file.save(saved_path)
+    suffix = Path(filename).suffix.lower() or ".wav"
+
+    raw_upload_path = workdir / "uploads" / f"input_raw{suffix}"
+    wav_path = workdir / "uploads" / "input.wav"
+
+    file.save(raw_upload_path)
+
+    try:
+        if suffix == ".wav":
+            # wav 也统一转一次，保证格式一致
+            convert_audio_to_wav(raw_upload_path, wav_path, samplerate=SAMPLERATE)
+        else:
+            convert_audio_to_wav(raw_upload_path, wav_path, samplerate=SAMPLERATE)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"音频转 WAV 失败: {e}"}), 400
 
     with JOBS_LOCK:
         JOBS[job_id] = init_job_state(job_id, workdir)
-        JOBS[job_id]["uploaded_audio"] = str(saved_path)
+        JOBS[job_id]["uploaded_audio"] = str(wav_path)
 
     t = Thread(target=run_job, args=(job_id,), daemon=True)
     t.start()

@@ -3,13 +3,13 @@ import os
 
 import hydra
 import soundfile as sf
-from hydra.utils import to_absolute_path
 from omegaconf import OmegaConf
 
 from src.utils.utils import load_wav
 from src.evaluation.separate import separate_with_ckpt_TDF
 from typing import Union, Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 class StemSeparator:
     def __init__(
@@ -33,7 +33,10 @@ class StemSeparator:
         if stem in self.model_cache:
             return self.model_cache[stem]
 
-        cfg_path = Path(to_absolute_path(f"configs/model/{stem}.yaml"))
+        cfg_path = PROJECT_ROOT / "configs" / "model" / f"{stem}.yaml"
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"找不到模型配置文件: {cfg_path}")
+
         cfg = OmegaConf.load(cfg_path)
         model = hydra.utils.instantiate(cfg)
 
@@ -58,6 +61,8 @@ class StemSeparator:
 
         model = self._load_model_cfg(stem)
         ckpt_path = Path(self.ckpt_map[stem])
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"找不到 checkpoint: {ckpt_path}")
 
         mixture = load_wav(audio_path)
 
