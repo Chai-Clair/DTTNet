@@ -197,7 +197,11 @@ def run_job(job_id: str):
 
         # vocals
         try:
-            v = transcribe_vocals(stem_paths["vocals"], str(scores_dir / "vocals"))
+            v = transcribe_vocals(
+                stem_paths["vocals"],
+                str(uploaded_audio),
+                str(scores_dir / "vocals"),
+            )
             if v.get("pdf"):
                 rel_path = str(Path(v["pdf"]).relative_to(workdir))
                 update_job(job_id, lambda j: j["stems"]["vocals"].update({
