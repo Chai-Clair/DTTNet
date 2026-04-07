@@ -16,7 +16,7 @@ audio_ch: 2
 block_type: TFC_TDF_Res2
 num_blocks: 5
 l: 3
-g: 32
+g: 16
 k: 3
 bn: 2
 bias: False
@@ -24,5 +24,5 @@ bn_norm: BN
 bandsequence:
   rnn_type: LSTM
   bidirectional: True
-  num_layers: 4
+  num_layers: 2
   n_heads: 2
