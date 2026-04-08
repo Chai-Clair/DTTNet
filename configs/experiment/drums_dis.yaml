@@ -21,7 +21,7 @@ model:
   optimizer: adamW
   bn_norm: syncBN
   audio_ch: 2 # datamodule.single_channel
-  g: 32
+  g: 16
 
 trainer:
   devices: 2 # int or list
