@@ -4,18 +4,18 @@ model_checkpoint:
   save_top_k: 5 # save k best models (determined by above metric)
   save_last: True # additionaly always save model from last epoch
   mode: "max" # can be "max" or "min"
-  verbose: False
+  verbose: True
   dirpath: "checkpoints/"
   filename: "{epoch:02d}-{step}"
 
-all_epoch_checkpoint:
-  _target_: pytorch_lightning.callbacks.ModelCheckpoint
-  monitor: null
-  save_top_k: -1
-  save_last: False
-  verbose: False
-  dirpath: "checkpoints/all_epochs/"
-  filename: "epoch={epoch:02d}-step={step}"
+#all_epoch_checkpoint:
+#  _target_: pytorch_lightning.callbacks.ModelCheckpoint
+#  monitor: null
+#  save_top_k: -1
+#  save_last: False
+#  verbose: False
+#  dirpath: "checkpoints/all_epochs/"
+#  filename: "epoch={epoch:02d}-step={step}"
 #
 #early_stopping:
 #  _target_: pytorch_lightning.callbacks.EarlyStopping
