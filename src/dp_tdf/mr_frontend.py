@@ -104,7 +104,7 @@ class MRFrontend(nn.Module):
         self.branch_mid = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
         self.branch_long = MRBranch(g, bn_norm, num_layers=num_branch_layers, bias=bias)
 
-        self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim)
+        #self.weight_net = WeightNet(g, hidden_dim=weight_hidden_dim)
 
     def _align_to_mid(self, x, target_hw):
         # x: (B, C, F, T)
@@ -133,7 +133,5 @@ class MRFrontend(nn.Module):
         f_m = self.branch_mid(f_mid_base)
         f_l = self.branch_long(f_l0)
 
-        a_s, a_m, a_l = self.weight_net(f_s, f_m, f_l)
-
-        f_fused = a_s * f_s + a_m * f_m + a_l * f_l
+        f_fused = (f_s + f_m + f_l) / 3.0
         return f_fused
