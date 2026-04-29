@@ -11,6 +11,30 @@ from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 from src.utils.utils import sdr, simplified_msseval
 
+def _check_finite_tensor(name, x):
+    if x is None:
+        return
+    if not torch.is_tensor(x):
+        return
+    if not torch.isfinite(x).all():
+        nan_cnt = torch.isnan(x).sum().item()
+        inf_cnt = torch.isinf(x).sum().item()
+
+        x_safe = torch.nan_to_num(x.detach(), nan=0.0, posinf=0.0, neginf=0.0)
+
+        print("\n" + "=" * 80)
+        print(f"[NON-FINITE DETECTED] {name}")
+        print(f"shape = {tuple(x.shape)}")
+        print(f"nan_count = {nan_cnt}")
+        print(f"inf_count = {inf_cnt}")
+        print(
+            f"safe_min = {x_safe.min().item():.6f}, "
+            f"safe_max = {x_safe.max().item():.6f}, "
+            f"safe_mean = {x_safe.mean().item():.6f}, "
+            f"safe_std = {x_safe.std().item():.6f}"
+        )
+        print("=" * 80 + "\n")
+        raise RuntimeError(f"Non-finite tensor detected in {name}")
 
 class AbstractModel(LightningModule):
 	__metaclass__ = ABCMeta
@@ -70,26 +94,43 @@ class AbstractModel(LightningModule):
 			return torch.optim.AdamW(self.parameters(), self.lr)
 
 	def comp_loss(self, pred_detail, target_wave):
-		#把模型输出从频谱域转回波形域，再计算 L1 损失。
-		pred_detail = self.istft(pred_detail)	# 模型输出的是频谱，先ISTFT回波形
+		# 把模型输出从频谱域转回波形域，再计算 L1 损失。
+		_check_finite_tensor("comp_loss/pred_detail_before_istft", pred_detail)
+		_check_finite_tensor("comp_loss/target_wave", target_wave)
 
-		comp_loss = F.l1_loss(pred_detail, target_wave)		# 用波形域的 L1 loss 做训练目标
+		pred_detail = self.istft(pred_detail)  # 模型输出的是频谱，先ISTFT回波形
+		_check_finite_tensor("comp_loss/pred_detail_after_istft", pred_detail)
 
-		self.log("train/comp_loss", comp_loss, sync_dist=True, on_step=False, on_epoch=True, prog_bar=False)	#把损失记录到日志
+		comp_loss = F.l1_loss(pred_detail, target_wave)  # 用波形域的 L1 loss 做训练目标
+		_check_finite_tensor("comp_loss/value", comp_loss)
+
+		self.log("train/comp_loss", comp_loss, sync_dist=True, on_step=False, on_epoch=True, prog_bar=False)  # 把损失记录到日志
 
 		return comp_loss
 
-
 	def training_step(self, *args, **kwargs) -> STEP_OUTPUT:
-		#定义训练时一个batch怎么跑。*args, **kwargs 用于接收框架自动传入的参数。
+		# 定义训练时一个batch怎么跑。*args, **kwargs 用于接收框架自动传入的参数。
 		# 通常 Lightning 调用时会传入 (batch, batch_idx)。这里通过 args[0] 获取第一个参数，即 batch。
-		mix_wave, target_wave = args[0] # (batch, c, 261120)
+		mix_wave, target_wave = args[0]  # (batch, c, 261120)
+
+		_check_finite_tensor("train/mix_wave", mix_wave)
+		_check_finite_tensor("train/target_wave", target_wave)
+
 		# input 1
 		mix_specs = self.multi_stft(mix_wave)
+
+		if isinstance(mix_specs, dict):
+			for k, v in mix_specs.items():
+				_check_finite_tensor(f"train/mix_specs[{k}]", v)
+		else:
+			_check_finite_tensor("train/mix_specs", mix_specs)
+
 		# forward
-		t_est_stft = self(mix_specs) # (batch, c, 1044, 256)
+		t_est_stft = self(mix_specs)  # (batch, c, 1044, 256)
+		_check_finite_tensor("train/t_est_stft", t_est_stft)
 
 		loss = self.comp_loss(t_est_stft, target_wave)
+		_check_finite_tensor("train/loss", loss)
 
 		self.log("train/loss", loss, sync_dist=True, on_step=True, on_epoch=True, prog_bar=True)
 
@@ -103,48 +144,87 @@ class AbstractModel(LightningModule):
 	# load them on multiple gpus, but aggregation was too difficult.
 	# So instead we load one whole track on a single device (data_loader batch_size should always be 1)
 	# and do all the batch splitting and aggregation on a single device.
-	def validation_step(self, *args, **kwargs) -> Optional[STEP_OUTPUT]:	#验证集上按照整首歌的方式评估模型
-		mix_chunk_batches, target = args[0]	#mix_chunk_batches是一个列表，每个其中的每个元素是一个batch
+
+	def validation_step(self, *args, **kwargs) -> Optional[STEP_OUTPUT]:  # 验证集上按照整首歌的方式评估模型
+		mix_chunk_batches, target = args[0]  # mix_chunk_batches是一个列表，每个其中的每个元素是一个batch
 
 		# remove data_loader batch dimension
 		# [(b, c, time)], (c, all_times)
 		mix_chunk_batches, target = [batch[0] for batch in mix_chunk_batches], target[0]
 
+		_check_finite_tensor("val/target", target)
+
 		# process whole track in batches of chunks
 		target_hat_chunks = []
-		for batch in mix_chunk_batches:
+		for i, batch in enumerate(mix_chunk_batches):
+			_check_finite_tensor(f"val/batch[{i}]", batch)
+
 			# input
 			mix_specs = self.multi_stft(batch)  # (batch, c*2, 1044, 256)
-			pred_detail = self(mix_specs) # (batch, c, 1044, 256), irm
-			pred_detail = self.istft(pred_detail)	#得到每个chunk的波形
 
-			target_hat_chunks.append(pred_detail[..., self.overlap:-self.overlap])	#减少chunk边界伪影，存入target_hat_chunks
-		target_hat_chunks = torch.cat(target_hat_chunks) # (b*len(ls),c,t) 拼接（总块数，c，有效长度）
+			if isinstance(mix_specs, dict):
+				for k, v in mix_specs.items():
+					_check_finite_tensor(f"val/mix_specs[{i}][{k}]", v)
+			else:
+				_check_finite_tensor(f"val/mix_specs[{i}]", mix_specs)
+
+			pred_detail = self(mix_specs)  # (batch, c, 1044, 256), irm
+			_check_finite_tensor(f"val/pred_detail_stft[{i}]", pred_detail)
+
+			pred_detail = self.istft(pred_detail)  # 得到每个chunk的波形
+			_check_finite_tensor(f"val/pred_detail_wave[{i}]", pred_detail)
+
+			target_hat_chunks.append(pred_detail[..., self.overlap:-self.overlap])  # 减少chunk边界伪影，存入target_hat_chunks
+
+		target_hat_chunks = torch.cat(target_hat_chunks)  # (b*len(ls),c,t) 拼接（总块数，c，有效长度）
+		_check_finite_tensor("val/target_hat_chunks_cat", target_hat_chunks)
 
 		# concat all output chunks (c, all_times)
-		target_hat = target_hat_chunks.transpose(0, 1).reshape(self.audio_ch, -1)[..., :target.shape[-1]]	#交换前两维，后两维合并，截取与目标相同的长度
+		target_hat = target_hat_chunks.transpose(0, 1).reshape(self.audio_ch, -1)[
+			..., :target.shape[-1]]  # 交换前两维，后两维合并，截取与目标相同的长度
+		_check_finite_tensor("val/target_hat", target_hat)
 
 		ests = target_hat.detach().cpu().numpy()  # (c, all_times)
 		references = target.cpu().numpy()
-		#↑将估计波形和target转化为numpy数组
+
+		if not np.isfinite(ests).all():
+			raise RuntimeError("Non-finite ests detected before SDR")
+		if not np.isfinite(references).all():
+			raise RuntimeError("Non-finite references detected before SDR")
+
 		score = sdr(ests, references)
 
 		# (src, t, c)
 		SDR = simplified_msseval(np.expand_dims(references.T, axis=0), np.expand_dims(ests.T, axis=0), chunk_size=44100)
-		# self.log("val/sdr", score, sync_dist=True, on_step=False, on_epoch=True, logger=True)
+
+		if not np.isfinite(score):
+			raise RuntimeError(f"Non-finite val song SDR detected: {score}")
 
 		return {'song': score, 'chunk': SDR}
 
-	def validation_epoch_end(self, outputs) -> None:	#把整轮验证里所有歌曲的结果汇总，得到最终验证指标。
-		avg_uSDR = torch.Tensor([x['song'] for x in outputs]).mean()	#把每首歌的 song-level SDR 求平均
+	def validation_epoch_end(self, outputs) -> None:  # 把整轮验证里所有歌曲的结果汇总，得到最终验证指标。
+		songs = torch.Tensor([x['song'] for x in outputs])
+		_check_finite_tensor("val_epoch/songs", songs)
+
+		avg_uSDR = songs.mean()  # 把每首歌的 song-level SDR 求平均
+		_check_finite_tensor("val_epoch/avg_uSDR", avg_uSDR)
+
 		self.log("val/usdr", avg_uSDR, sync_dist=True, on_step=False, on_epoch=True, logger=True)
 
 		chunks = [x['chunk'][0, :] for x in outputs]
 		# concat np array
 		chunks = np.concatenate(chunks, axis=0)
+
+		if not np.isfinite(chunks).any():
+			raise RuntimeError("All chunk SDR values are non-finite in validation_epoch_end")
+
 		median_cSDR = np.nanmedian(chunks.flatten(), axis=0)
 		# 把所有 chunk 的 SDR 拼起来，取中位数cSDR
 		median_cSDR = float(median_cSDR)
+
+		if not np.isfinite(median_cSDR):
+			raise RuntimeError(f"Non-finite median_cSDR detected: {median_cSDR}")
+
 		self.log("val/csdr", median_cSDR, sync_dist=True, on_step=False, on_epoch=True, logger=True)
 
 	def _stft_impl(self, x, n_fft, window):

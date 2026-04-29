@@ -3,7 +3,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.layers import get_norm
+def _check_finite(name, x):
+    if not torch.isfinite(x).all():
+        nan_cnt = torch.isnan(x).sum().item()
+        inf_cnt = torch.isinf(x).sum().item()
 
+        x_safe = torch.nan_to_num(x.detach(), nan=0.0, posinf=0.0, neginf=0.0)
+
+        print("\n" + "=" * 80)
+        print(f"[NON-FINITE DETECTED] {name}")
+        print(f"shape = {tuple(x.shape)}")
+        print(f"nan_count = {nan_cnt}")
+        print(f"inf_count = {inf_cnt}")
+        print(
+            f"safe_min = {x_safe.min().item():.6f}, "
+            f"safe_max = {x_safe.max().item():.6f}, "
+            f"safe_mean = {x_safe.mean().item():.6f}, "
+            f"safe_std = {x_safe.std().item():.6f}"
+        )
+        print("=" * 80 + "\n")
+        raise RuntimeError(f"Non-finite tensor detected in {name}")
 
 class ConvBNAct(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, bn_norm, bias=False):
@@ -121,17 +140,34 @@ class MRFrontend(nn.Module):
         返回：
         F_fused: shape=(B, g, F_m, T_m)
         """
+        _check_finite("x_short", x_short)
+        _check_finite("f_mid_base", f_mid_base)
+        _check_finite("x_long", x_long)
+
         target_hw = f_mid_base.shape[-2:]  # (F_m, T_m)
 
         f_s0 = self.stem_short(x_short)
         f_l0 = self.stem_long(x_long)
 
+        _check_finite("f_s0_after_stem", f_s0)
+        _check_finite("f_l0_after_stem", f_l0)
+
         f_s0 = self._align_to_mid(f_s0, target_hw)
         f_l0 = self._align_to_mid(f_l0, target_hw)
+
+        _check_finite("f_s0_after_align", f_s0)
+        _check_finite("f_l0_after_align", f_l0)
 
         f_s = self.branch_short(f_s0)
         f_m = self.branch_mid(f_mid_base)
         f_l = self.branch_long(f_l0)
 
+        _check_finite("f_s", f_s)
+        _check_finite("f_m", f_m)
+        _check_finite("f_l", f_l)
+
         f_fused = (f_s + f_m + f_l) / 3.0
+
+        _check_finite("f_fused", f_fused)
+
         return f_fused
