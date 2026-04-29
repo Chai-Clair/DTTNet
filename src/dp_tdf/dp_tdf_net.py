@@ -132,11 +132,17 @@ class DPTDFNet(AbstractModel):
         x = self.bottleneck_block2(x)
 
         for i in range(self.n):
-            x = self.us[i](x)
-            # print(f"us{i} in: {x.shape}")
-            # print(f"ds{i} out: {ds_outputs[-i - 1].shape}")
-            x = x * ds_outputs[-i - 1]
-            x = self.decoding_blocks[i](x)
+            skip = ds_outputs[-i - 1]
+
+            if x.dtype == torch.float16:
+                with torch.cuda.amp.autocast(enabled=False):
+                    x = self.us[i](x.float())
+                    x = x * skip.float()
+                    x = self.decoding_blocks[i](x)
+            else:
+                x = self.us[i](x)
+                x = x * skip
+                x = self.decoding_blocks[i](x)
 
         x = x.transpose(-1, -2)
 
