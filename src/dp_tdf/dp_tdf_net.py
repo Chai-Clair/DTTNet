@@ -4,9 +4,10 @@ import torch
 from src.dp_tdf.modules import TFC_TDF, TFC_TDF_Res1, TFC_TDF_Res2
 from src.dp_tdf.bandsequence import BandSequenceModelModule
 
-from src.layers import (get_norm)
+from src.layers import get_norm
 from src.dp_tdf.abstract import AbstractModel
 from src.dp_tdf.mr_frontend import MRFrontend
+
 
 class DPTDFNet(AbstractModel):
     def __init__(self, num_blocks, l, g, k, bn, bias, bn_norm, bandsequence, block_type, mr_frontend=None, **kwargs):
@@ -14,15 +15,15 @@ class DPTDFNet(AbstractModel):
         super(DPTDFNet, self).__init__(**kwargs)
         # self.save_hyperparameters()
 
-        self.num_blocks = num_blocks #U-Net主框架encoder和decoder共有多少个block
-        self.l = l #
-        self.g = g  #通道数增量
-        self.k = k  #应该是卷积核大小
+        self.num_blocks = num_blocks  # U-Net主框架encoder和decoder共有多少个block
+        self.l = l
+        self.g = g  # 通道数增量
+        self.k = k  # 应该是卷积核大小
         self.bn = bn
-        self.bias = bias    #卷积层/线性层要不要带偏置项（bias）
+        self.bias = bias  # 卷积层/线性层要不要带偏置项（bias）
 
-        self.n = num_blocks // 2    #encoder和decoder各一半
-        scale = (2, 2)  #上采样和下采样都按2倍缩放
+        self.n = num_blocks // 2  # encoder和decoder各一半
+        scale = (2, 2)  # 上采样和下采样都按2倍缩放
 
         if block_type == "TFC_TDF":
             T_BLOCK = TFC_TDF
@@ -52,8 +53,8 @@ class DPTDFNet(AbstractModel):
             # 残差缩放系数，第一版用可学习标量
             self.fusion_scale = nn.Parameter(torch.tensor(0.1))
 
-        f = self.dim_f  #当前频率大小，下采样f=f/2，上采样f=f*2
-        c = g   #first_conv后的通道数
+        f = self.dim_f  # 当前频率大小，下采样f=f/2，上采样f=f*2
+        c = g  # first_conv后的通道数
         self.encoding_blocks = nn.ModuleList()
         self.ds = nn.ModuleList()
 
@@ -75,7 +76,7 @@ class DPTDFNet(AbstractModel):
         self.bottleneck_block2 = BandSequenceModelModule(
             **bandsequence,
             input_dim_size=c,
-            hidden_dim_size=2*c
+            hidden_dim_size=2 * c
         )
 
         self.decoding_blocks = nn.ModuleList()
@@ -101,9 +102,9 @@ class DPTDFNet(AbstractModel):
 
     def forward(self, x):
         """
-            两种输入形式：
-            1. 原始 DTT：x是tensor，shape=(B, C_in, F, T)
-            2. 严格版多窗前端：x是dict，包含short/mid/long
+        两种输入形式：
+        1. 原始 DTT：x是tensor，shape=(B, C_in, F, T)
+        2. 严格版多窗前端：x是dict，包含short/mid/long
         """
         if isinstance(x, dict):
             x_short = x["short"]
@@ -133,9 +134,21 @@ class DPTDFNet(AbstractModel):
 
         for i in range(self.n):
             x = self.us[i](x)
-            # print(f"us{i} in: {x.shape}")
-            # print(f"ds{i} out: {ds_outputs[-i - 1].shape}")
-            x = x * ds_outputs[-i - 1]
+
+            skip = ds_outputs[-i - 1]
+
+            # AMP(fp16) 下 decoder skip 乘法偶发溢出：
+            # 只把 x * skip 这一处临时放到 fp32 计算；
+            # 然后 clamp 到 fp16 可表示范围，再转回 fp16。
+            # 这样不改变整体训练精度配置，也不把整个 decoder 改成 fp32。
+            if x.dtype == torch.float16 or skip.dtype == torch.float16:
+                x = (x.float() * skip.float()).clamp(
+                    min=-torch.finfo(torch.float16).max,
+                    max=torch.finfo(torch.float16).max,
+                ).to(dtype=torch.float16)
+            else:
+                x = x * skip
+
             x = self.decoding_blocks[i](x)
 
         x = x.transpose(-1, -2)
