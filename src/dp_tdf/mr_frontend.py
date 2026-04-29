@@ -109,7 +109,24 @@ class MRFrontend(nn.Module):
     def _align_to_mid(self, x, target_hw):
         # x: (B, C, F, T)
         # target_hw: (F_mid, T_mid)
-        return F.interpolate(x, size=target_hw, mode=self.align_mode, align_corners=False)
+
+        # torch 2.0.1 + 当前环境下，bilinear interpolate 不支持 bf16。
+        # 因此 bf16 训练时临时转 fp32 做插值，再转回原 dtype。
+        if x.dtype == torch.bfloat16:
+            y = F.interpolate(
+                x.float(),
+                size=target_hw,
+                mode=self.align_mode,
+                align_corners=False,
+            )
+            return y.to(dtype=x.dtype)
+
+        return F.interpolate(
+            x,
+            size=target_hw,
+            mode=self.align_mode,
+            align_corners=False,
+        )
 
     def forward(self, x_short, f_mid_base, x_long):
         """
