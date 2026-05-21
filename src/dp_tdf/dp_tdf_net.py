@@ -136,19 +136,7 @@ class DPTDFNet(AbstractModel):
             # print(f"us{i} in: {x.shape}")
             # print(f"ds{i} out: {ds_outputs[-i - 1].shape}")
 
-            skip = ds_outputs[-i - 1]
-
-            # AMP(fp16) 下 decoder skip 乘法偶发溢出：
-            # 只把 x * skip 这一处临时放到 fp32 计算；
-            # 然后 clamp 到 fp16 可表示范围，再转回 fp16。
-            # 这样不改变整体训练精度配置，也不把整个 decoder 改成 fp32。
-            if x.dtype == torch.float16 or skip.dtype == torch.float16:
-                x = (x.float() * skip.float()).clamp(
-                    min=-torch.finfo(torch.float16).max,
-                    max=torch.finfo(torch.float16).max,
-                ).to(dtype=torch.float16)
-            else:
-                x = x * skip
+            x = x * ds_outputs[-i - 1]
             x = self.decoding_blocks[i](x)
 
         x = x.transpose(-1, -2)
