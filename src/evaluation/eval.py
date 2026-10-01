@@ -3,7 +3,9 @@ from pathlib import Path
 from typing import Optional, List
 
 from concurrent import futures
+import csv
 import hydra
+import torch
 import wandb
 import os
 import shutil
@@ -15,7 +17,7 @@ import soundfile as sf
 from tqdm import tqdm
 import numpy as np
 from src.callbacks.wandb_callbacks import get_wandb_logger
-from src.evaluation.separate import separate_with_onnx_TDF, separate_with_ckpt_TDF
+from src.evaluation.separate import separate_with_ckpt_TDF
 from src.utils import utils
 from src.utils.utils import load_wav, sdr, get_median_csdr, save_results, get_metrics
 
@@ -45,22 +47,26 @@ def evaluation(config: DictConfig):
     model = hydra.utils.instantiate(config.model)
     target_name = model.target_name
     ckpt_path = Path(config.ckpt_path)
-    is_onnx = os.path.split(ckpt_path)[-1].split('.')[-1] == 'onnx'
     shutil.copy(ckpt_path,os.getcwd()) # copy model
 
     ssdrs = []
     bss_lst = []
     bss_perms = []
-    num_tracks = len(listdir(data_dir))
+    # 只统计曲目目录，避免 .DS_Store 等文件进入均值分母
+    datas = sorted(d for d in listdir(data_dir) if data_dir.joinpath(d).is_dir())
+    num_tracks = len(datas)
     target_list = [config.model.target_name,"complement"]
 
+    # 逐曲目结果：model, seed, checkpoint, track, stem, uSDR
+    meta = torch.load(ckpt_path, map_location="cpu", weights_only=False).get("drff_meta", {})
+    run_model = meta.get("fusion_mode", getattr(model, "fusion_mode", "baseline"))
+    run_seed = config.get("seed") if config.get("seed") is not None else meta.get("seed")
+    track_rows = []
+    # 逐片段融合权重：model, seed, track, stem, chunk, alpha_short, alpha_mid, alpha_long, fusion_scale
+    weight_rows = []
 
     pool = futures.ProcessPoolExecutor
     with pool(config.pool_workers) as pool:
-        datas = sorted(listdir(data_dir))
-        if len(datas) > 27: # if not debugging
-            # move idx 27 to head
-            datas = [datas[27]] + datas[:27] + datas[28:]
         # iterate datas with batchsize 8
         for k in range(0, len(datas), config.pool_workers):
             batch = datas[k:k + config.pool_workers]
@@ -75,10 +81,8 @@ def evaluation(config: DictConfig):
                     mixture = np.mean(mixture, axis=0, keepdims=True)
                     target = np.mean(target, axis=0, keepdims=True)
                 #target_hat = {source: separate(config['batch_size'], models[source], onnxs[source], mixture) for source in sources}
-                if is_onnx:
-                    target_hat = separate_with_onnx_TDF(config.batch_size, model, ckpt_path, mixture)
-                else:
-                    target_hat = separate_with_ckpt_TDF(config.batch_size, model, ckpt_path, mixture, config.device, config.double_chunk, config.overlap_add)
+                target_hat, alphas = separate_with_ckpt_TDF(config.batch_size, model, ckpt_path, mixture, config.device, config.double_chunk, config.overlap_add)
+                weight_rows += [[run_model, run_seed, folder_name, target_name, chunk, *a] for chunk, a in enumerate(alphas)]
 
 
                 pendings.append((folder_name, pool.submit(
@@ -97,6 +101,7 @@ def evaluation(config: DictConfig):
                 bss_lst.append(bssmetrics)
                 bss_perms.append(perms)
                 ssdrs.append(ssdr)
+                track_rows.append([run_model, run_seed, ckpt_path.name, track_name, target_name, ssdr])
 
                 for logger in loggers:
                     logger.log_metrics({'song/ssdr': ssdr}, k+i)
@@ -104,6 +109,16 @@ def evaluation(config: DictConfig):
 
     log_dir = os.getcwd()
     save_results(log_dir, bss_lst, target_list, bss_perms, ssdrs)
+    with open(os.path.join(log_dir, "per_track.csv"), "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["model", "seed", "checkpoint", "track", "stem", "uSDR"])
+        writer.writerows(track_rows)
+    if weight_rows:
+        with open(os.path.join(log_dir, "fusion_weights.csv"), "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["model", "seed", "track", "stem", "chunk",
+                             "alpha_short", "alpha_mid", "alpha_long", "fusion_scale"])
+            writer.writerows(weight_rows)
 
     cSDR = get_median_csdr(bss_lst)
     uSDR = sum(ssdrs)/num_tracks

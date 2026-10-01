@@ -14,7 +14,7 @@ from pytorch_lightning.loggers import Logger, WandbLogger
 from tqdm import tqdm
 import numpy as np
 from src.callbacks.wandb_callbacks import get_wandb_logger
-from src.evaluation.separate import separate_with_onnx_TDF, separate_with_ckpt_TDF
+from src.evaluation.separate import separate_with_ckpt_TDF
 from src.utils import utils
 from src.utils.utils import load_wav, sdr, get_median_csdr, save_results, get_metrics
 
@@ -33,13 +33,9 @@ def evaluation(config: DictConfig, idx):
     model = hydra.utils.instantiate(config.model)
     target_name = model.target_name
     ckpt_path = Path(config.ckpt_path)
-    is_onnx = os.path.split(ckpt_path)[-1].split('.')[-1] == 'onnx'
     shutil.copy(ckpt_path,os.getcwd()) # copy model
 
-    datas = sorted(listdir(data_dir))
-    if len(datas) > 27: # if not debugging
-        # move idx 27 to head
-        datas = [datas[27]] + datas[:27] + datas[28:]
+    datas = sorted(d for d in listdir(data_dir) if data_dir.joinpath(d).is_dir())
 
 
     track = datas[idx]
@@ -51,10 +47,7 @@ def evaluation(config: DictConfig, idx):
         mixture = np.mean(mixture, axis=0, keepdims=True)
         target = np.mean(target, axis=0, keepdims=True)
     #target_hat = {source: separate(config['batch_size'], models[source], onnxs[source], mixture) for source in sources}
-    if is_onnx:
-        target_hat = separate_with_onnx_TDF(config.batch_size, model, ckpt_path, mixture)
-    else:
-        target_hat = separate_with_ckpt_TDF(config.batch_size, model, ckpt_path, mixture, config.device, config.double_chunk, overlap_factor=config.overlap_factor)
+    target_hat, _ = separate_with_ckpt_TDF(config.batch_size, model, ckpt_path, mixture, config.device, config.double_chunk, config.overlap_add)
 
     bssmetrics, perms, ssdr = get_metrics(target_hat, target, mixture, sr=44100,version=config.bss)
     # dump bssmetrics into pkl
